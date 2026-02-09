@@ -1002,33 +1002,4 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
       context,
     ).showSnackBar(SnackBar(content: Text('Voice Profile "$name" created!')));
   }
-
-  Widget _buildColorOption(Color color) {
-    final bool isSelected = widget.currentHighlightColor.value == color.value;
-    return GestureDetector(
-      onTap: () {
-        if (widget.onHighlightColorChanged != null) {
-          widget.onHighlightColorChanged!(color);
-        }
-      },
-      child: Container(
-        margin: const EdgeInsets.only(right: 12),
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.5),
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isSelected
-                ? Theme.of(context).primaryColor
-                : Colors.transparent,
-            width: 2,
-          ),
-        ),
-        child: isSelected
-            ? Icon(Icons.check, size: 20, color: Theme.of(context).primaryColor)
-            : null,
-      ),
-    );
-  }
 }

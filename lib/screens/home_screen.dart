@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -56,92 +57,98 @@ class _HomeScreenState extends State<HomeScreen>
                 // Custom Header
                 // GAME HUD HEADER
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 20),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(10),
+                            width: 48,
+                            height: 48,
                             decoration: BoxDecoration(
-                              color: Colors.deepOrange,
-                              borderRadius: BorderRadius.circular(14),
+                              gradient: const LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFFFF7043), Color(0xFFFF5722)],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
-                                  color: Colors.deepOrange.withOpacity(0.4),
+                                  color: const Color(
+                                    0xFFFF5722,
+                                  ).withOpacity(0.4),
                                   blurRadius: 12,
                                   offset: const Offset(0, 4),
                                 ),
                               ],
-                              border: Border.all(
-                                color: Colors.white.withOpacity(0.2),
-                                width: 1.5,
-                              ),
                             ),
                             child: const Icon(
                               Icons.grid_view_rounded,
                               color: Colors.white,
-                              size: 24,
+                              size: 26,
                             ),
                           ),
                           const SizedBox(width: 16),
                           Text(
                             'LIBRARY',
-                            style: theme.textTheme.headlineMedium?.copyWith(
-                              fontFamily: 'Outfit',
-                              fontWeight: FontWeight.w900,
+                            style: GoogleFonts.outfit(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
                               color: theme.colorScheme.onBackground,
-                              letterSpacing: 2.0,
                             ),
                           ).animate().fadeIn(duration: 600.ms).slideX(),
                         ],
                       ),
                       const SizedBox(height: 24),
+
+                      // Modern Segmented Tab Bar
                       Container(
-                            height: 55,
+                            height: 56,
                             padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF1E293B), // Dark Slate
-                              borderRadius: BorderRadius.circular(18),
+                              color: const Color(0xFF1A1F2E), // Dark Navy
+                              borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: Colors.white.withOpacity(0.1),
-                                width: 1.5,
+                                color: Colors.white.withOpacity(0.05),
+                                width: 1,
                               ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.2),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 5),
-                                ),
-                              ],
                             ),
                             child: TabBar(
                               controller: _tabController,
                               indicator: BoxDecoration(
-                                color: Colors.deepOrange,
-                                borderRadius: BorderRadius.circular(14),
+                                gradient: const LinearGradient(
+                                  colors: [
+                                    Color(0xFFFF7043),
+                                    Color(0xFFFF5722),
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(12),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.deepOrange.withOpacity(0.5),
-                                    blurRadius: 12,
-                                    offset: const Offset(0, 4),
+                                    color: const Color(
+                                      0xFFFF5722,
+                                    ).withOpacity(0.4),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
                                   ),
                                 ],
-                                border: Border.all(
-                                  color: Colors.white.withOpacity(0.2),
-                                ),
                               ),
                               labelColor: Colors.white,
-                              unselectedLabelColor: Colors.grey[400],
-                              labelStyle: const TextStyle(
-                                fontFamily: 'Outfit',
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
+                              unselectedLabelColor: const Color(
+                                0xFF94A3B8,
+                              ), // Slate 400
+                              labelStyle: GoogleFonts.outfit(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
                                 letterSpacing: 1,
                               ),
-                              dividerColor:
-                                  Colors.transparent, // Remove divider
+                              dividerColor: Colors.transparent,
+                              overlayColor: MaterialStateProperty.all(
+                                Colors.transparent,
+                              ),
                               tabs: const [
                                 Tab(text: 'RECENT'),
                                 Tab(text: 'SAVED'),
@@ -203,35 +210,34 @@ class _HomeScreenState extends State<HomeScreen>
                   title: file.fileName,
                   subtitle: 'Last opened: ${_formatDate(file.lastOpened)}',
                   meta: FileHelper.formatFileSize(file.fileSize),
-                  icon: Icons.picture_as_pdf_rounded,
-                  color: Colors.red.shade400,
+                  icon: Icons.picture_as_pdf_outlined, // Modern icon
+                  color: const Color(0xFFFF5722), // Premium Orange
                   onTap: () => _openPdfFile(file.filePath),
                   heroTag: 'filename_${file.filePath}',
                   onDelete: () async {
                     final confirm = await showDialog<bool>(
                       context: context,
                       builder: (context) => AlertDialog(
-                        backgroundColor: const Color(0xFFFFF0E6),
+                        backgroundColor: const Color(0xFF1A1F2E), // Dark Navy
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(28),
+                          borderRadius: BorderRadius.circular(24),
                         ),
                         title: const Padding(
                           padding: EdgeInsets.only(top: 8),
                           child: Text(
                             'Remove from History',
                             style: TextStyle(
-                              fontSize: 22,
+                              fontSize: 18,
                               fontWeight: FontWeight.w700,
-                              color: Color(0xFF2D2D2D),
-                              letterSpacing: -0.5,
+                              color: Colors.white,
                             ),
                           ),
                         ),
                         content: Text(
                           'Are you sure you want to remove "${file.fileName}" from recent history?',
                           style: const TextStyle(
-                            fontSize: 16,
-                            color: Color(0xFF4A4A4A),
+                            fontSize: 14,
+                            color: Colors.white70,
                             height: 1.5,
                           ),
                         ),
@@ -244,16 +250,16 @@ class _HomeScreenState extends State<HomeScreen>
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.pop(context, false),
-                            child: const Text(
+                            child: Text(
                               'Cancel',
-                              style: TextStyle(color: Colors.orange),
+                              style: TextStyle(color: Colors.grey[400]),
                             ),
                           ),
                           TextButton(
                             onPressed: () => Navigator.pop(context, true),
                             child: const Text(
                               'Remove',
-                              style: TextStyle(color: Color(0xFFFF6B6B)),
+                              style: TextStyle(color: Color(0xFFFF5722)),
                             ),
                           ),
                         ],
@@ -303,8 +309,8 @@ class _HomeScreenState extends State<HomeScreen>
                       subtitle:
                           '${bookmark.fileName} • Page ${bookmark.pageNumber + 1}',
                       meta: _formatDate(bookmark.createdAt),
-                      icon: Icons.bookmark_rounded,
-                      color: Colors.orange.shade400,
+                      icon: Icons.bookmark_border_rounded,
+                      color: const Color(0xFFFF5722),
                       onTap: () => _openBookmark(bookmark),
                     )
                     .animate()
@@ -330,14 +336,14 @@ class _HomeScreenState extends State<HomeScreen>
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF1E293B), // Slate 800 background
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.white.withOpacity(0.05), width: 1),
+        color: const Color(0xFF151922), // Deeper Dark for Card
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withOpacity(0.03), width: 1),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.3), // Deeper shadow
-            blurRadius: 15,
-            offset: const Offset(0, 8),
+            color: Colors.black.withOpacity(0.5),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
@@ -419,22 +425,23 @@ class _HomeScreenState extends State<HomeScreen>
                       const SizedBox(height: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
+                          horizontal: 10,
+                          vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: Theme.of(
-                            context,
-                          ).primaryColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(6),
+                          color: const Color(0xFF1E293B), // Darker pill
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: color.withOpacity(0.3),
+                            width: 1,
+                          ),
                         ),
                         child: Text(
                           meta,
                           style: TextStyle(
-                            fontFamily: 'Outfit',
-                            fontSize: 11, // Smaller meta
-                            color: Theme.of(context).primaryColor,
+                            fontSize: 11,
                             fontWeight: FontWeight.w600,
+                            color: color,
                           ),
                         ),
                       ),
