@@ -1,0 +1,33 @@
+# Web Server
+fastapi
+uvicorn
+python-multipart
+
+# PDF Processing
+pymupdf
+pytesseract
+pdf2image
+PyPDF2
+
+# NLP & Summarization
+sumy
+nltk
+deep-translator
+googletrans==4.0.0rc1
+spacy
+scikit-learn
+
+# OCR & Image Processing
+opencv-python
+pytesseract
+pillow
+pdf2image
+
+# Machine Learning
+scikit-learn
+scipy
+
+# Additional utilities
+numpy
+pillow
+langdetect
