@@ -449,18 +449,27 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                 ),
                 if (onDelete != null)
-                  IconButton(
-                    onPressed: onDelete,
-                    icon: Icon(
-                      Icons.delete_outline_rounded,
-                      color: Colors.red.shade400, // Softer red
-                      size: 22,
-                    ),
-                    tooltip: 'Remove',
-                    style: IconButton.styleFrom(
-                      backgroundColor: Colors.red.withOpacity(0.1),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: GestureDetector(
+                      onTap: onDelete,
+                      behavior: HitTestBehavior.opaque, // Ensure hit test
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: Colors.red.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.red.withOpacity(0.3),
+                            width: 1,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.delete_outline_rounded,
+                          color: Color(0xFFFF5252),
+                          size: 22,
+                        ),
                       ),
                     ),
                   ),
