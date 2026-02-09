@@ -214,59 +214,8 @@ class _HomeScreenState extends State<HomeScreen>
                   color: const Color(0xFFFF5722), // Premium Orange
                   onTap: () => _openPdfFile(file.filePath),
                   heroTag: 'filename_${file.filePath}',
-                  onDelete: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        backgroundColor: const Color(0xFF1A1F2E), // Dark Navy
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(24),
-                        ),
-                        title: const Padding(
-                          padding: EdgeInsets.only(top: 8),
-                          child: Text(
-                            'Remove from History',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                        content: Text(
-                          'Are you sure you want to remove "${file.fileName}" from recent history?',
-                          style: const TextStyle(
-                            fontSize: 14,
-                            color: Colors.white70,
-                            height: 1.5,
-                          ),
-                        ),
-                        actionsPadding: const EdgeInsets.fromLTRB(
-                          24,
-                          0,
-                          24,
-                          24,
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, false),
-                            child: Text(
-                              'Cancel',
-                              style: TextStyle(color: Colors.grey[400]),
-                            ),
-                          ),
-                          TextButton(
-                            onPressed: () => Navigator.pop(context, true),
-                            child: const Text(
-                              'Remove',
-                              style: TextStyle(color: Color(0xFFFF5722)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                    if (confirm == true)
-                      controller.removeRecentFile(file.filePath);
+                  onDelete: () {
+                    controller.removeRecentFile(file.filePath);
                   },
                 )
                 .animate()
