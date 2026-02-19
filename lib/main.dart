@@ -66,7 +66,7 @@ class MyApp extends StatelessWidget {
               useMaterial3: true,
               brightness: Brightness.light,
               scaffoldBackgroundColor: const Color(0xFFF8FAFC), // Slate 50
-              primaryColor: const Color(0xFFFF5722), // Deep Orange
+              primaryColor: const Color(0xFFFF3B30), // iOS System Red
 
               textTheme:
                   GoogleFonts.outfitTextTheme(
@@ -85,13 +85,16 @@ class MyApp extends StatelessWidget {
                   ),
 
               colorScheme: ColorScheme.fromSeed(
-                seedColor: const Color(0xFFFF5722),
+                seedColor: const Color(0xFF6366F1),
                 brightness: Brightness.light,
                 background: const Color(0xFFF8FAFC),
                 surface: Colors.white,
-                primary: const Color(0xFFFF5722),
-                secondary: const Color(0xFFFF8A65),
+                primary: const Color(0xFFFF3B30),
+                secondary: const Color(0xFFFF9500), // iOS Orange Accent
               ),
+
+              dividerColor: Colors.grey.shade200, // Light divider
+              unselectedWidgetColor: const Color(0xFF94A3B8), // Slate 400
 
               appBarTheme: AppBarTheme(
                 backgroundColor: Colors.white,
@@ -110,11 +113,11 @@ class MyApp extends StatelessWidget {
               cardTheme: CardThemeData(
                 color: Colors.white,
                 elevation: 8, // Higher elevation for pop
-                shadowColor: const Color(0xFFFF5722).withOpacity(0.15),
+                shadowColor: const Color(0xFFFF3B30).withOpacity(0.12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(24),
                   side: BorderSide(
-                    color: const Color(0xFFFF5722).withOpacity(0.05),
+                    color: const Color(0xFFFF3B30).withOpacity(0.08),
                     width: 1,
                   ),
                 ),
@@ -122,10 +125,10 @@ class MyApp extends StatelessWidget {
 
               elevatedButtonTheme: ElevatedButtonThemeData(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF5722),
+                  backgroundColor: const Color(0xFFFF3B30),
                   foregroundColor: Colors.white,
                   elevation: 8,
-                  shadowColor: const Color(0xFFFF5722).withOpacity(0.4),
+                  shadowColor: const Color(0xFFFF3B30).withOpacity(0.3),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 32,
                     vertical: 18,
@@ -154,7 +157,7 @@ class MyApp extends StatelessWidget {
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
                   borderSide: const BorderSide(
-                    color: Color(0xFFFF5722),
+                    color: Color(0xFFFF3B30),
                     width: 2.5,
                   ),
                 ),
@@ -165,7 +168,7 @@ class MyApp extends StatelessWidget {
               ),
 
               floatingActionButtonTheme: FloatingActionButtonThemeData(
-                backgroundColor: const Color(0xFFFF5722),
+                backgroundColor: const Color(0xFFFF3B30),
                 foregroundColor: Colors.white,
                 elevation: 10,
                 shape: RoundedRectangleBorder(
@@ -189,7 +192,7 @@ class MyApp extends StatelessWidget {
               scaffoldBackgroundColor: const Color(
                 0xFF0F1115,
               ), // Deep Black/Blue background
-              primaryColor: const Color(0xFFFF5722),
+              primaryColor: const Color(0xFFFF3B30),
 
               textTheme: GoogleFonts.outfitTextTheme(ThemeData.dark().textTheme)
                   .copyWith(
@@ -209,12 +212,13 @@ class MyApp extends StatelessWidget {
                   ),
 
               colorScheme: ColorScheme.fromSeed(
-                seedColor: const Color(0xFFFF5722), // Deep Orange
+                seedColor: const Color(0xFFFF3B30), // iOS Red
+
                 brightness: Brightness.dark,
                 background: const Color(0xFF0F1115),
                 surface: const Color(0xFF1A1F2E), // Card Color
-                primary: const Color(0xFFFF5722),
-                secondary: const Color(0xFFFF8A65),
+                primary: const Color(0xFFFF3B30),
+                secondary: const Color(0xFFFF9500),
               ),
 
               appBarTheme: AppBarTheme(
@@ -244,10 +248,10 @@ class MyApp extends StatelessWidget {
 
               elevatedButtonTheme: ElevatedButtonThemeData(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF5722),
+                  backgroundColor: const Color(0xFFFF3B30),
                   foregroundColor: Colors.white,
                   elevation: 8,
-                  shadowColor: const Color(0xFFFF5722).withOpacity(0.5),
+                  shadowColor: const Color(0xFFFF3B30).withOpacity(0.5),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
                   ),
@@ -275,14 +279,14 @@ class MyApp extends StatelessWidget {
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
                   borderSide: const BorderSide(
-                    color: Color(0xFFFF5722),
+                    color: Color(0xFFFF3B30),
                     width: 2.5,
                   ),
                 ),
               ),
 
               floatingActionButtonTheme: FloatingActionButtonThemeData(
-                backgroundColor: const Color(0xFFFF5722),
+                backgroundColor: const Color(0xFFFF3B30),
                 foregroundColor: Colors.white,
                 elevation: 10,
                 shape: RoundedRectangleBorder(

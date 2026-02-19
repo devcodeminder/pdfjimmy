@@ -69,13 +69,13 @@ class _HomeScreenState extends State<HomeScreen>
                               gradient: const LinearGradient(
                                 begin: Alignment.topLeft,
                                 end: Alignment.bottomRight,
-                                colors: [Color(0xFFFF7043), Color(0xFFFF5722)],
+                                colors: [Color(0xFFFF3B30), Color(0xFFFF9500)],
                               ),
                               borderRadius: BorderRadius.circular(16),
                               boxShadow: [
                                 BoxShadow(
                                   color: const Color(
-                                    0xFFFF5722,
+                                    0xFFFF3B30,
                                   ).withOpacity(0.4),
                                   blurRadius: 12,
                                   offset: const Offset(0, 4),
@@ -107,10 +107,14 @@ class _HomeScreenState extends State<HomeScreen>
                             height: 56,
                             padding: const EdgeInsets.all(4),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF1A1F2E), // Dark Navy
+                              color: theme.brightness == Brightness.dark
+                                  ? const Color(0xFF1A1F2E)
+                                  : Colors.white,
                               borderRadius: BorderRadius.circular(16),
                               border: Border.all(
-                                color: Colors.white.withOpacity(0.05),
+                                color: theme.brightness == Brightness.dark
+                                    ? Colors.white.withOpacity(0.05)
+                                    : Colors.grey.withOpacity(0.2),
                                 width: 1,
                               ),
                             ),
@@ -119,8 +123,8 @@ class _HomeScreenState extends State<HomeScreen>
                               indicator: BoxDecoration(
                                 gradient: const LinearGradient(
                                   colors: [
-                                    Color(0xFFFF7043),
-                                    Color(0xFFFF5722),
+                                    Color(0xFFFF3B30),
+                                    Color(0xFFFF9500),
                                   ],
                                   begin: Alignment.topLeft,
                                   end: Alignment.bottomRight,
@@ -129,7 +133,7 @@ class _HomeScreenState extends State<HomeScreen>
                                 boxShadow: [
                                   BoxShadow(
                                     color: const Color(
-                                      0xFFFF5722,
+                                      0xFFFF3B30,
                                     ).withOpacity(0.4),
                                     blurRadius: 8,
                                     offset: const Offset(0, 2),
@@ -137,9 +141,7 @@ class _HomeScreenState extends State<HomeScreen>
                                 ],
                               ),
                               labelColor: Colors.white,
-                              unselectedLabelColor: const Color(
-                                0xFF94A3B8,
-                              ), // Slate 400
+                              unselectedLabelColor: theme.unselectedWidgetColor,
                               labelStyle: GoogleFonts.outfit(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13,
@@ -211,7 +213,7 @@ class _HomeScreenState extends State<HomeScreen>
                   subtitle: 'Last opened: ${_formatDate(file.lastOpened)}',
                   meta: FileHelper.formatFileSize(file.fileSize),
                   icon: Icons.picture_as_pdf_outlined, // Modern icon
-                  color: const Color(0xFFFF5722), // Premium Orange
+                  color: const Color(0xFFFF3B30), // iOS Red
                   onTap: () => _openPdfFile(file.filePath),
                   heroTag: 'filename_${file.filePath}',
                   onDelete: () {
@@ -259,7 +261,7 @@ class _HomeScreenState extends State<HomeScreen>
                           '${bookmark.fileName} • Page ${bookmark.pageNumber + 1}',
                       meta: _formatDate(bookmark.createdAt),
                       icon: Icons.bookmark_border_rounded,
-                      color: const Color(0xFFFF5722),
+                      color: const Color(0xFFFF3B30),
                       onTap: () => _openBookmark(bookmark),
                     )
                     .animate()
@@ -283,14 +285,24 @@ class _HomeScreenState extends State<HomeScreen>
     VoidCallback? onDelete,
     String? heroTag,
   }) {
+    final theme = Theme.of(context);
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF151922), // Deeper Dark for Card
+        color: theme.brightness == Brightness.dark
+            ? const Color(0xFF151922)
+            : Colors.white,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.03), width: 1),
+        border: Border.all(
+          color: theme.brightness == Brightness.dark
+              ? Colors.white.withOpacity(0.03)
+              : Colors.grey.withOpacity(0.1),
+          width: 1,
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.5),
+            color: theme.brightness == Brightness.dark
+                ? Colors.black.withOpacity(0.5)
+                : Colors.black.withOpacity(0.05),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
@@ -302,8 +314,8 @@ class _HomeScreenState extends State<HomeScreen>
         child: InkWell(
           borderRadius: BorderRadius.circular(20),
           onTap: onTap,
-          splashColor: Colors.deepOrange.withOpacity(0.1),
-          highlightColor: Colors.deepOrange.withOpacity(0.05),
+          splashColor: Colors.red.withOpacity(0.1),
+          highlightColor: Colors.red.withOpacity(0.05),
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: Row(
@@ -336,11 +348,13 @@ class _HomeScreenState extends State<HomeScreen>
                               title,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontFamily: 'Outfit',
                                 fontSize: 16,
                                 fontWeight: FontWeight.bold, // Heavier weight
-                                color: Colors.white, // White text
+                                color: theme.brightness == Brightness.dark
+                                    ? Colors.white
+                                    : const Color(0xFF1E293B),
                                 letterSpacing: 0.5,
                               ),
                             ),
@@ -351,11 +365,13 @@ class _HomeScreenState extends State<HomeScreen>
                           title,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontFamily: 'Outfit',
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
-                            color: Colors.white,
+                            color: theme.brightness == Brightness.dark
+                                ? Colors.white
+                                : const Color(0xFF1E293B),
                             letterSpacing: 0.5,
                           ),
                         ),
@@ -365,7 +381,9 @@ class _HomeScreenState extends State<HomeScreen>
                         style: TextStyle(
                           fontFamily: 'Outfit',
                           fontSize: 13,
-                          color: Colors.grey[400], // Lighter grey
+                          color: theme.brightness == Brightness.dark
+                              ? Colors.grey[400]
+                              : const Color(0xFF64748B),
                           height: 1.3,
                         ),
                         maxLines: 1,
@@ -378,7 +396,9 @@ class _HomeScreenState extends State<HomeScreen>
                           vertical: 4,
                         ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF1E293B), // Darker pill
+                          color: theme.brightness == Brightness.dark
+                              ? const Color(0xFF1E293B)
+                              : const Color(0xFFF1F5F9),
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
                             color: color.withOpacity(0.3),
@@ -436,6 +456,7 @@ class _HomeScreenState extends State<HomeScreen>
     required String subtitle,
     VoidCallback? onTap,
   }) {
+    final theme = Theme.of(context);
     return Center(
       child: InkWell(
         onTap: onTap,
@@ -448,7 +469,9 @@ class _HomeScreenState extends State<HomeScreen>
               Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: Colors.grey.withOpacity(0.1),
+                  color: theme.brightness == Brightness.dark
+                      ? Colors.white.withOpacity(0.05)
+                      : Colors.grey.withOpacity(0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(icon, size: 48, color: Colors.grey[400]),
@@ -459,14 +482,20 @@ class _HomeScreenState extends State<HomeScreen>
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: Colors.grey[800],
+                  color: theme.brightness == Brightness.dark
+                      ? Colors.white
+                      : const Color(0xFF1E293B),
                 ),
               ),
               const SizedBox(height: 8),
               Text(
                 subtitle,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[500]),
+                style: TextStyle(
+                  color: theme.brightness == Brightness.dark
+                      ? Colors.grey[400]
+                      : Colors.grey[600],
+                ),
               ),
             ],
           ),
@@ -885,11 +914,11 @@ class _HomeScreenState extends State<HomeScreen>
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [Colors.orange.shade400, Colors.deepOrange.shade700],
+                colors: [Color(0xFFFF3B30), Color(0xFFFF9500)],
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.deepOrange.withOpacity(0.5),
+                  color: const Color(0xFFFF3B30).withOpacity(0.5),
                   blurRadius: 15,
                   offset: const Offset(0, 8),
                   spreadRadius: 2,
@@ -945,6 +974,7 @@ class _HomeScreenState extends State<HomeScreen>
     VoidCallback onTap, {
     required Color color,
   }) {
+    final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
@@ -954,7 +984,9 @@ class _HomeScreenState extends State<HomeScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
-              color: Colors.black87,
+              color: theme.brightness == Brightness.dark
+                  ? Colors.black87
+                  : Colors.white,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: color.withOpacity(0.5), width: 1.5),
               boxShadow: [

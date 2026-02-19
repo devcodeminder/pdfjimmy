@@ -698,11 +698,19 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
 
   void _toggleToolbar() {
     setState(() {
-      _showToolbar = !_showToolbar;
-      if (_showToolbar) {
+      // When TTS player is open, tapping the PDF should only SHOW the toolbar
+      // (if it was hidden), never hide it. This prevents the play/pause button
+      // tap from accidentally hiding the top toolbar and making controls disappear.
+      if (_showTtsPlayer) {
+        _showToolbar = true;
         _toolbarAnimationController.forward();
       } else {
-        _toolbarAnimationController.reverse();
+        _showToolbar = !_showToolbar;
+        if (_showToolbar) {
+          _toolbarAnimationController.forward();
+        } else {
+          _toolbarAnimationController.reverse();
+        }
       }
       if (_enableHaptics) HapticFeedback.selectionClick();
     });
@@ -1086,30 +1094,58 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
                         bottom: 0,
                         left: 0,
                         right: 0,
-                        child: TtsPlayerWidget(
-                          filePath: widget.filePath,
-                          currentPage: controller.currentPage,
-                          onPageChanged: (page) =>
-                              _pdfViewerController.jumpToPage(page + 1),
-                          onClose: () {
-                            setState(() => _showTtsPlayer = false);
-                            _pdfViewerController.clearSelection();
-                            _searchResult?.clear();
-                          },
-                          onWordSpoken:
-                              (word, start, end, allText, rects, pageSize) {
-                                if (!mounted) return;
-                                setState(() {
-                                  _currentTtsHighlightRects = rects;
-                                  _currentTtsPageSize = pageSize;
-                                  // Ensure high contrast or visibility if needed
-                                });
-                              },
-                          currentHighlightColor: _ttsHighlightColor,
-                          onHighlightColorChanged: (color) {
-                            setState(() => _ttsHighlightColor = color);
-                          },
-                          ttsService: _ttsService,
+                        // Absorb taps so they don't bubble up to the parent
+                        // GestureDetector(onTap: _toggleToolbar). Without this,
+                        // tapping play/pause also hides the top toolbar.
+                        child: GestureDetector(
+                          onTap: () {}, // absorb tap — do nothing
+                          child: TtsPlayerWidget(
+                            key: const ValueKey('tts_player'),
+                            filePath: widget.filePath,
+                            currentPage: controller.currentPage,
+                            totalPages: controller.totalPages,
+                            ttsService: _ttsService, // Pass persistent service
+                            onPageChanged: (page) =>
+                                _pdfViewerController.jumpToPage(page + 1),
+                            onClose: () {
+                              setState(() => _showTtsPlayer = false);
+                              _pdfViewerController.clearSelection();
+                              _searchResult?.clear();
+                            },
+                            onWordSpoken: (word, start, end, allText, rects, pageSize) {
+                              print(
+                                'EnhancedPdfViewerScreen: onWordSpoken called',
+                              );
+                              print(
+                                'EnhancedPdfViewerScreen: Word: "$word", Rects: ${rects?.length ?? 0}, PageSize: $pageSize',
+                              );
+
+                              if (rects != null && rects.isNotEmpty) {
+                                print(
+                                  'EnhancedPdfViewerScreen: First rect: ${rects.first}',
+                                );
+                              }
+
+                              if (!mounted) {
+                                print(
+                                  'EnhancedPdfViewerScreen: Widget not mounted, skipping update',
+                                );
+                                return;
+                              }
+
+                              setState(() {
+                                _currentTtsHighlightRects = rects;
+                                _currentTtsPageSize = pageSize;
+                                print(
+                                  'EnhancedPdfViewerScreen: State updated - Rects: ${_currentTtsHighlightRects?.length ?? 0}, PageSize: $_currentTtsPageSize',
+                                );
+                              });
+                            },
+                            currentHighlightColor: _ttsHighlightColor,
+                            onHighlightColorChanged: (color) {
+                              setState(() => _ttsHighlightColor = color);
+                            },
+                          ),
                         ),
                       ),
                   ],

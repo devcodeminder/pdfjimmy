@@ -5,6 +5,7 @@ import 'package:pdfjimmy/services/pdf_tts_service.dart';
 class TtsPlayerWidget extends StatefulWidget {
   final String filePath;
   final int currentPage;
+  final int totalPages;
   final Function(int) onPageChanged;
   final VoidCallback onClose;
   final Function(String, int, int, String, List<Rect>?, Size)? onWordSpoken;
@@ -16,6 +17,7 @@ class TtsPlayerWidget extends StatefulWidget {
     Key? key,
     required this.filePath,
     required this.currentPage,
+    required this.totalPages,
     required this.onPageChanged,
     required this.onClose,
     this.onWordSpoken,
@@ -35,20 +37,19 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
   double _speed = 0.5;
   double _pitch = 1.0;
   List<Map<Object?, Object?>> _voices = [];
-  Map<Object?, Object?>? _selectedVoice;
+  Map<Object?, Object?>? _readVoice; // voice for reading PDF
+  Map<Object?, Object?>? _translationVoice; // voice for translation
   bool _showSettings = false;
 
   @override
   void initState() {
     super.initState();
     _ttsService = widget.ttsService ?? PdfTtsService();
-    _loadVoices();
-  }
 
-  Future<void> _loadVoices() async {
-    final voices = await _ttsService.getVoices();
-
-    // Set up highlight callback
+    // *** CRITICAL: Set up callbacks SYNCHRONOUSLY before any async work.
+    // If callbacks are set inside an async method (after an await), there is
+    // a window where TTS can start firing progress events while onSpeakProgress
+    // is still null — causing highlighting to silently fail.
     _ttsService.onSpeakProgress =
         (String word, int start, int end, String allText, List<Rect>? rects) {
           if (mounted && widget.onWordSpoken != null) {
@@ -63,6 +64,18 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
           }
         };
 
+    _ttsService.onPageComplete = (int nextPage, int total) {
+      if (mounted) {
+        widget.onPageChanged(nextPage);
+      }
+    };
+
+    // Load voices asynchronously (only for voice selection UI)
+    _loadVoices();
+  }
+
+  Future<void> _loadVoices() async {
+    final voices = await _ttsService.getVoices();
     if (mounted) {
       setState(() {
         _voices = voices;
@@ -71,18 +84,82 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
   }
 
   Future<void> _togglePlay() async {
-    if (_isPlaying) {
-      await _ttsService.pause();
-      setState(() => _isPlaying = false);
-    } else {
-      if (_ttsService.isPaused) {
-        await _ttsService.resume();
+    print(
+      'TtsPlayerWidget: Toggle play - current state: playing=$_isPlaying, paused=${_ttsService.isPaused}',
+    );
+
+    try {
+      if (_isPlaying) {
+        // Pause playback
+        print('TtsPlayerWidget: Pausing playback');
+        await _ttsService.pause();
+        if (mounted) {
+          setState(() => _isPlaying = false);
+        }
       } else {
-        setState(() => _isLoading = true);
-        await _ttsService.readPage(widget.filePath, widget.currentPage + 1);
-        setState(() => _isLoading = false);
+        if (_ttsService.isPaused) {
+          // Resume from pause
+          print('TtsPlayerWidget: Resuming playback');
+          await _ttsService.resume();
+          if (mounted) {
+            setState(() => _isPlaying = true);
+          }
+        } else {
+          // Start new playback
+          print(
+            'TtsPlayerWidget: Starting new playback for page ${widget.currentPage + 1}',
+          );
+
+          if (mounted) {
+            setState(() => _isLoading = true);
+          }
+
+          try {
+            await _ttsService.readPage(
+              widget.filePath,
+              widget.currentPage + 1,
+              totalPages: widget.totalPages,
+            );
+
+            if (mounted) {
+              setState(() {
+                _isLoading = false;
+                _isPlaying = true;
+              });
+            }
+          } catch (e) {
+            print('TtsPlayerWidget: Error starting playback: $e');
+            if (mounted) {
+              setState(() => _isLoading = false);
+
+              // Show error to user
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Failed to start reading: ${e.toString()}'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            }
+          }
+        }
       }
-      setState(() => _isPlaying = true);
+    } catch (e) {
+      print('TtsPlayerWidget: Error in toggle play: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isPlaying = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Playback error: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 
@@ -96,25 +173,42 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     _ttsService.setPitch(value);
   }
 
-  void _changeVoice(Map<Object?, Object?>? voice) {
-    if (voice != null) {
-      setState(() => _selectedVoice = voice);
-      try {
-        final Map<String, String> voiceMap = {};
-        voice.forEach((key, value) {
-          if (key != null && value != null) {
-            voiceMap[key.toString()] = value.toString();
-          }
-        });
-        _ttsService.setVoice(voiceMap);
-      } catch (e) {
-        print('Error converting voice map: $e');
+  void _changeVoice(
+    Map<Object?, Object?>? voice, {
+    bool isTranslation = false,
+  }) {
+    if (voice == null) return;
+
+    setState(() {
+      if (isTranslation) {
+        _translationVoice = voice;
+      } else {
+        _readVoice = voice;
       }
+    });
+
+    try {
+      final Map<String, String> voiceMap = {};
+      voice.forEach((key, value) {
+        if (key != null && value != null) {
+          voiceMap[key.toString()] = value.toString();
+        }
+      });
+
+      if (!isTranslation) {
+        // Apply read voice — if currently reading, switch in real-time
+        _ttsService.switchVoiceWhileReading(voiceMap);
+      } else {
+        _ttsService.setTranslationVoice(voiceMap);
+      }
+    } catch (e) {
+      print('Error converting voice map: $e');
     }
   }
 
   @override
   void dispose() {
+    print('TtsPlayerWidget: Dispose called');
     _ttsService.stop();
     super.dispose();
   }
@@ -145,18 +239,18 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
             offset: const Offset(0, -5),
           ),
         ],
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         border: Border.all(
           color: isDark ? Colors.white.withOpacity(0.1) : Colors.grey.shade200,
           width: 1.5,
         ),
       ),
       child: ClipRRect(
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         child: BackdropFilter(
           filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
           child: Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
@@ -175,39 +269,24 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Premium Drag Handle
+                // Drag Handle
                 Center(
                   child: Container(
-                    width: 50,
-                    height: 5,
+                    width: 36,
+                    height: 3,
                     decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          Theme.of(context).primaryColor.withOpacity(0.3),
-                          Theme.of(context).primaryColor.withOpacity(0.6),
-                          Theme.of(context).primaryColor.withOpacity(0.3),
-                        ],
-                      ),
+                      color: Theme.of(context).primaryColor.withOpacity(0.4),
                       borderRadius: BorderRadius.circular(10),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Theme.of(
-                            context,
-                          ).primaryColor.withOpacity(0.3),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 10),
 
                 // Premium Header with Gradient
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
+                    horizontal: 10,
+                    vertical: 7,
                   ),
                   decoration: BoxDecoration(
                     gradient: LinearGradient(
@@ -216,7 +295,7 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                         Theme.of(context).primaryColor.withOpacity(0.05),
                       ],
                     ),
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(14),
                     border: Border.all(
                       color: Theme.of(context).primaryColor.withOpacity(0.2),
                       width: 1,
@@ -228,7 +307,7 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                       Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(10),
+                            padding: const EdgeInsets.all(7),
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
                                 colors: [
@@ -237,30 +316,23 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                                 ],
                               ),
                               shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.amber.withOpacity(0.4),
-                                  blurRadius: 12,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
                             ),
                             child: const Icon(
                               Icons.auto_awesome,
                               color: Colors.white,
-                              size: 20,
+                              size: 16,
                             ),
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: 8),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
                                 'AI Reader',
-                                style: Theme.of(context).textTheme.titleLarge
+                                style: Theme.of(context).textTheme.titleMedium
                                     ?.copyWith(
                                       fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.5,
+                                      letterSpacing: 0.3,
                                       foreground: Paint()
                                         ..shader =
                                             LinearGradient(
@@ -274,27 +346,27 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                                               const Rect.fromLTWH(
                                                 0,
                                                 0,
-                                                200,
-                                                70,
+                                                150,
+                                                50,
                                               ),
                                             ),
                                     ),
                               ),
                               Container(
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 2,
+                                  horizontal: 6,
+                                  vertical: 1,
                                 ),
                                 decoration: BoxDecoration(
                                   color: Theme.of(
                                     context,
                                   ).primaryColor.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
                                   'Page ${widget.currentPage + 1}',
                                   style: TextStyle(
-                                    fontSize: 11,
+                                    fontSize: 10,
                                     fontWeight: FontWeight.w600,
                                     color: Theme.of(context).primaryColor,
                                   ),
@@ -327,11 +399,11 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                 ),
 
                 if (_showSettings) ...[
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
                   _buildSettings(),
                 ],
 
-                const SizedBox(height: 28),
+                const SizedBox(height: 12),
 
                 // Premium Controls with 3D Effect
                 Row(
@@ -341,7 +413,7 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                       icon: Icons.skip_previous_rounded,
                       onPressed: () =>
                           widget.onPageChanged(widget.currentPage - 1),
-                      size: 48,
+                      size: 36,
                     ),
 
                     // Main Play/Pause Button - Premium 3D Style
@@ -349,8 +421,8 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                       onTap: _togglePlay,
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
-                        width: 80,
-                        height: 80,
+                        width: 56,
+                        height: 56,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           gradient: LinearGradient(
@@ -383,12 +455,12 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                           ],
                           border: Border.all(
                             color: Colors.white.withOpacity(0.3),
-                            width: 3,
+                            width: 2,
                           ),
                         ),
                         child: _isLoading
                             ? Padding(
-                                padding: const EdgeInsets.all(24),
+                                padding: const EdgeInsets.all(16),
                                 child: CircularProgressIndicator(
                                   color: Colors.white,
                                   strokeWidth: 3,
@@ -409,7 +481,7 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                                       ? Icons.pause_rounded
                                       : Icons.play_arrow_rounded,
                                   color: Colors.white,
-                                  size: 40,
+                                  size: 28,
                                   shadows: const [
                                     Shadow(
                                       color: Colors.black26,
@@ -426,11 +498,11 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                       icon: Icons.skip_next_rounded,
                       onPressed: () =>
                           widget.onPageChanged(widget.currentPage + 1),
-                      size: 48,
+                      size: 36,
                     ),
                   ],
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 10),
               ],
             ),
           ),
@@ -505,133 +577,138 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     );
   }
 
+  // ── Voice character data ─────────────────────────────────────────────────
+  // Each language gets a unique cartoon character: name, emoji, bg color.
+  static const Map<String, Map<String, dynamic>> _langCharacters = {
+    'ta': {'name': 'Murugan', 'emoji': '🧑‍🦱', 'color': 0xFFFF6B35}, // Tamil
+    'hi': {'name': 'Arjun', 'emoji': '👳', 'color': 0xFFFF9933}, // Hindi
+    'te': {'name': 'Ravi', 'emoji': '🧔', 'color': 0xFF6C63FF}, // Telugu
+    'ml': {
+      'name': 'Suresh',
+      'emoji': '🧑‍🦳',
+      'color': 0xFF00B4D8,
+    }, // Malayalam
+    'kn': {'name': 'Kiran', 'emoji': '👨‍🎓', 'color': 0xFF2DC653}, // Kannada
+    'bn': {'name': 'Priya', 'emoji': '🧕', 'color': 0xFFE040FB}, // Bengali
+    'mr': {'name': 'Ananya', 'emoji': '👩‍🦱', 'color': 0xFFFF4081}, // Marathi
+    'gu': {'name': 'Dhruv', 'emoji': '🧑‍🍳', 'color': 0xFFFFAB40}, // Gujarati
+    'pa': {'name': 'Gurpreet', 'emoji': '🥷', 'color': 0xFF40C4FF}, // Punjabi
+    'ur': {'name': 'Zara', 'emoji': '🧙', 'color': 0xFF69F0AE}, // Urdu
+    'ar': {'name': 'Khalid', 'emoji': '🧞', 'color': 0xFFFFD740}, // Arabic
+    'zh': {'name': 'Mei', 'emoji': '🐉', 'color': 0xFFFF5252}, // Chinese
+    'ja': {'name': 'Hana', 'emoji': '🌸', 'color': 0xFFFF80AB}, // Japanese
+    'ko': {'name': 'Joon', 'emoji': '🤖', 'color': 0xFF64FFDA}, // Korean
+    'fr': {'name': 'Pierre', 'emoji': '🥐', 'color': 0xFF448AFF}, // French
+    'de': {'name': 'Klaus', 'emoji': '🦁', 'color': 0xFFFFD740}, // German
+    'es': {'name': 'Sofia', 'emoji': '💃', 'color': 0xFFFF6E40}, // Spanish
+    'pt': {'name': 'Lucas', 'emoji': '⚽', 'color': 0xFF69F0AE}, // Portuguese
+    'it': {'name': 'Marco', 'emoji': '🍕', 'color': 0xFFFF5252}, // Italian
+    'ru': {'name': 'Natasha', 'emoji': '🐻', 'color': 0xFF40C4FF}, // Russian
+    'en': {
+      'name': 'Alex',
+      'emoji': '🧑‍💻',
+      'color': 0xFF7C4DFF,
+    }, // English (default)
+    // English female names get a different character
+    'en_f': {'name': 'Emma', 'emoji': '👩‍💼', 'color': 0xFFFF4081},
+  };
+
+  static const Set<String> _englishFemaleNames = {
+    'zira',
+    'hazel',
+    'susan',
+    'eva',
+    'samantha',
+    'victoria',
+    'karen',
+    'moira',
+    'tessa',
+    'female',
+    'woman',
+    'girl',
+  };
+
+  /// Get character data for a voice
+  Map<String, dynamic> _charData(Map<Object?, Object?> voice) {
+    final name = voice['name']?.toString().toLowerCase() ?? '';
+    final locale = voice['locale']?.toString().toLowerCase() ?? '';
+    final lang = locale.split('-').first;
+
+    if (lang == 'en') {
+      final isFemale = _englishFemaleNames.any((n) => name.contains(n));
+      return _langCharacters[isFemale ? 'en_f' : 'en']!;
+    }
+    return _langCharacters[lang] ??
+        {'name': 'Voice', 'emoji': '🎙️', 'color': 0xFF9E9E9E};
+  }
+
+  /// Deduplicate voices: keep only the first (best) voice per language code.
+  List<Map<Object?, Object?>> _deduplicatedVoices() {
+    final seen = <String>{};
+    final result = <Map<Object?, Object?>>[];
+    for (final voice in _voices) {
+      final locale = voice['locale']?.toString().toLowerCase() ?? '';
+      final lang = locale.split('-').first;
+      // For English, also differentiate male/female
+      final name = voice['name']?.toString().toLowerCase() ?? '';
+      final key = lang == 'en'
+          ? (_englishFemaleNames.any((n) => name.contains(n)) ? 'en_f' : 'en_m')
+          : lang;
+      if (!seen.contains(key)) {
+        seen.add(key);
+        result.add(voice);
+      }
+    }
+    return result;
+  }
+
   Widget _buildSettings() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
       decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: isDark
-              ? [Colors.white.withOpacity(0.08), Colors.white.withOpacity(0.04)]
+              ? [Colors.white.withOpacity(0.07), Colors.white.withOpacity(0.03)]
               : [Colors.grey.shade50, Colors.white],
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: isDark ? Colors.white.withOpacity(0.1) : Colors.grey.shade200,
-          width: 1.5,
+          width: 1,
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
-          ),
-        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Voice Selection
+          // ── Read Voice ────────────────────────────────────────────
           if (_voices.isNotEmpty) ...[
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Theme.of(context).primaryColor.withOpacity(0.2),
-                        Theme.of(context).primaryColor.withOpacity(0.1),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.record_voice_over,
-                    color: Theme.of(context).primaryColor,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  'Voice',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                    color: isDark ? Colors.white : Colors.grey.shade800,
-                  ),
-                ),
-              ],
+            _sectionLabel('📖 Read Voice', isDark),
+            const SizedBox(height: 8),
+            _buildVoiceRow(
+              isDark: isDark,
+              selectedVoice: _readVoice,
+              isTranslation: false,
             ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: isDark
-                      ? [
-                          Colors.white.withOpacity(0.05),
-                          Colors.white.withOpacity(0.02),
-                        ]
-                      : [Colors.white, Colors.grey.shade50],
-                ),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: Theme.of(context).primaryColor.withOpacity(0.2),
-                  width: 1.5,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Theme.of(context).primaryColor.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<Map<Object?, Object?>>(
-                  value: _selectedVoice,
-                  isExpanded: true,
-                  hint: Text(
-                    'Select a voice',
-                    style: TextStyle(
-                      color: isDark ? Colors.white60 : Colors.grey.shade600,
-                    ),
-                  ),
-                  dropdownColor: isDark
-                      ? const Color(0xFF1a1f2e)
-                      : Colors.white,
-                  items: _voices.map((voice) {
-                    return DropdownMenuItem(
-                      value: voice,
-                      child: Text(
-                        voice['name'].toString(),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: isDark ? Colors.white : Colors.grey.shade800,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                  onChanged: _changeVoice,
-                  icon: Icon(
-                    Icons.arrow_drop_down_rounded,
-                    color: Theme.of(context).primaryColor,
-                  ),
-                ),
-              ),
+            const SizedBox(height: 14),
+
+            // ── Translation Voice ─────────────────────────────────────
+            _sectionLabel('🌐 Translation Voice', isDark),
+            const SizedBox(height: 8),
+            _buildVoiceRow(
+              isDark: isDark,
+              selectedVoice: _translationVoice,
+              isTranslation: true,
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 14),
           ],
 
-          // Speed Control
-          _buildPremiumSlider(
-            icon: Icons.speed_rounded,
+          // ── Speed ────────────────────────────────────────────────
+          _buildCompactSlider(
+            emoji: '⚡',
             label: 'Speed',
             value: _speed,
             displayValue: '${_speed.toStringAsFixed(1)}x',
@@ -639,12 +716,13 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
             max: 1.0,
             onChanged: _changeSpeed,
             color: Colors.blue,
+            isDark: isDark,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
 
-          // Pitch Control
-          _buildPremiumSlider(
-            icon: Icons.graphic_eq_rounded,
+          // ── Pitch ────────────────────────────────────────────────
+          _buildCompactSlider(
+            emoji: '🎵',
             label: 'Pitch',
             value: _pitch,
             displayValue: _pitch.toStringAsFixed(1),
@@ -652,121 +730,171 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
             max: 2.0,
             onChanged: _changePitch,
             color: Colors.purple,
+            isDark: isDark,
           ),
+          const SizedBox(height: 14),
 
-          // Highlight Color Selection
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.amber.withOpacity(0.3),
-                      Colors.orange.withOpacity(0.2),
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(
-                  Icons.palette_rounded,
-                  color: Colors.amber,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Highlight Color',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 16,
-                  color: isDark ? Colors.white : Colors.grey.shade800,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+          // ── Highlight Color ──────────────────────────────────────
+          _sectionLabel('🎨 Highlight', isDark),
+          const SizedBox(height: 8),
           SizedBox(
-            height: 50,
+            height: 38,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                _buildPremiumColorOption(Colors.greenAccent, 'Green'),
-                _buildPremiumColorOption(Colors.yellowAccent, 'Yellow'),
-                _buildPremiumColorOption(Colors.orangeAccent, 'Orange'),
-                _buildPremiumColorOption(Colors.cyanAccent, 'Cyan'),
-                _buildPremiumColorOption(Colors.pinkAccent, 'Pink'),
-                _buildPremiumColorOption(Colors.purpleAccent, 'Purple'),
+                _buildColorDot(Colors.greenAccent),
+                _buildColorDot(Colors.yellowAccent),
+                _buildColorDot(Colors.orangeAccent),
+                _buildColorDot(Colors.cyanAccent),
+                _buildColorDot(Colors.pinkAccent),
+                _buildColorDot(Colors.purpleAccent),
               ],
             ),
           ),
-
-          // Voice Cloning Button
-          const SizedBox(height: 20),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  Theme.of(context).primaryColor.withOpacity(0.1),
-                  Theme.of(context).primaryColor.withOpacity(0.05),
-                ],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: Theme.of(context).primaryColor.withOpacity(0.3),
-                width: 2,
-              ),
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: _showVoiceCloningDialog,
-                borderRadius: BorderRadius.circular(16),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              Theme.of(context).primaryColor,
-                              Theme.of(context).primaryColor.withOpacity(0.7),
-                            ],
-                          ),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.graphic_eq,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Text(
-                        'Clone Voice (Create Profile)',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15,
-                          color: Theme.of(context).primaryColor,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
+          const SizedBox(height: 8),
         ],
       ),
     );
   }
 
-  Widget _buildPremiumSlider({
-    required IconData icon,
+  /// Builds a horizontal scrollable row of voice cards.
+  /// [isTranslation] = true → tapping sets the translation voice.
+  /// [isTranslation] = false → tapping sets the read voice.
+  Widget _buildVoiceRow({
+    required bool isDark,
+    required Map<Object?, Object?>? selectedVoice,
+    required bool isTranslation,
+  }) {
+    final dedupedVoices = _deduplicatedVoices();
+    return SizedBox(
+      height: 96,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        itemCount: dedupedVoices.length,
+        itemBuilder: (context, i) {
+          final voice = dedupedVoices[i];
+          final isSelected =
+              selectedVoice != null &&
+              selectedVoice['locale'] == voice['locale'];
+          final char = _charData(voice);
+          final charName = char['name'] as String;
+          final charEmoji = char['emoji'] as String;
+          final charColor = Color(char['color'] as int);
+          final locale = voice['locale']?.toString() ?? '';
+          final langCode = locale.split('-').first.toUpperCase();
+
+          return GestureDetector(
+            onTap: () => _changeVoice(voice, isTranslation: isTranslation),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              margin: const EdgeInsets.only(right: 10),
+              width: 72,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: isSelected
+                      ? [
+                          charColor.withOpacity(0.25),
+                          charColor.withOpacity(0.10),
+                        ]
+                      : isDark
+                      ? [
+                          Colors.white.withOpacity(0.07),
+                          Colors.white.withOpacity(0.03),
+                        ]
+                      : [Colors.white, Colors.grey.shade50],
+                ),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: isSelected
+                      ? charColor
+                      : (isDark ? Colors.white12 : Colors.grey.shade200),
+                  width: isSelected ? 2 : 1,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: charColor.withOpacity(0.35),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ]
+                    : [],
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: charColor.withOpacity(isSelected ? 0.25 : 0.12),
+                      border: isSelected
+                          ? Border.all(
+                              color: charColor.withOpacity(0.5),
+                              width: 1.5,
+                            )
+                          : null,
+                    ),
+                    child: Center(
+                      child: Text(
+                        charEmoji,
+                        style: const TextStyle(fontSize: 24),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    charName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: isSelected
+                          ? FontWeight.w700
+                          : FontWeight.w600,
+                      color: isSelected
+                          ? charColor
+                          : (isDark ? Colors.white70 : Colors.grey.shade700),
+                    ),
+                  ),
+                  Text(
+                    langCode,
+                    style: TextStyle(
+                      fontSize: 8,
+                      color: isSelected
+                          ? charColor.withOpacity(0.8)
+                          : Colors.grey.shade400,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text, bool isDark) {
+    return Text(
+      text,
+      style: TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w700,
+        color: isDark ? Colors.white60 : Colors.grey.shade600,
+        letterSpacing: 0.5,
+      ),
+    );
+  }
+
+  Widget _buildCompactSlider({
+    required String emoji,
     required String label,
     required double value,
     required String displayValue,
@@ -774,9 +902,8 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     required double max,
     required ValueChanged<double> onChanged,
     required Color color,
+    required bool isDark,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -785,60 +912,48 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
           children: [
             Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [color.withOpacity(0.3), color.withOpacity(0.2)],
-                    ),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(icon, color: color, size: 20),
-                ),
-                const SizedBox(width: 12),
+                Text(emoji, style: const TextStyle(fontSize: 14)),
+                const SizedBox(width: 6),
                 Text(
                   label,
                   style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                    color: isDark ? Colors.white : Colors.grey.shade800,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                    color: isDark ? Colors.white70 : Colors.grey.shade700,
                   ),
                 ),
               ],
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [color.withOpacity(0.2), color.withOpacity(0.1)],
-                ),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: color.withOpacity(0.3), width: 1.5),
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: color.withOpacity(0.3), width: 1),
               ),
               child: Text(
                 displayValue,
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontSize: 11,
                   color: color,
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 8),
         SliderTheme(
           data: SliderThemeData(
             activeTrackColor: color,
-            inactiveTrackColor: color.withOpacity(0.2),
+            inactiveTrackColor: color.withOpacity(0.15),
             thumbColor: Colors.white,
-            overlayColor: color.withOpacity(0.2),
+            overlayColor: color.withOpacity(0.15),
             thumbShape: const RoundSliderThumbShape(
-              enabledThumbRadius: 12,
-              elevation: 4,
+              enabledThumbRadius: 9,
+              elevation: 3,
             ),
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 24),
-            trackHeight: 6,
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+            trackHeight: 4,
           ),
           child: Slider(value: value, min: min, max: max, onChanged: onChanged),
         ),
@@ -846,9 +961,8 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     );
   }
 
-  Widget _buildPremiumColorOption(Color color, String name) {
+  Widget _buildColorDot(Color color) {
     final bool isSelected = widget.currentHighlightColor.value == color.value;
-
     return GestureDetector(
       onTap: () {
         if (widget.onHighlightColorChanged != null) {
@@ -857,149 +971,28 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
       },
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        margin: const EdgeInsets.only(right: 12),
-        width: isSelected ? 55 : 50,
-        height: isSelected ? 55 : 50,
+        margin: const EdgeInsets.only(right: 10),
+        width: isSelected ? 38 : 32,
+        height: isSelected ? 38 : 32,
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [color, color.withOpacity(0.7)],
-          ),
+          color: color,
           shape: BoxShape.circle,
           border: Border.all(
             color: isSelected ? Colors.white : Colors.transparent,
-            width: 3,
+            width: 2.5,
           ),
           boxShadow: [
             BoxShadow(
-              color: color.withOpacity(isSelected ? 0.6 : 0.3),
-              blurRadius: isSelected ? 15 : 8,
-              offset: const Offset(0, 4),
-              spreadRadius: isSelected ? 2 : 0,
+              color: color.withOpacity(isSelected ? 0.6 : 0.25),
+              blurRadius: isSelected ? 10 : 4,
+              offset: const Offset(0, 2),
             ),
           ],
         ),
         child: isSelected
-            ? Container(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [Colors.white.withOpacity(0.3), Colors.transparent],
-                  ),
-                ),
-                child: const Icon(
-                  Icons.check_rounded,
-                  size: 24,
-                  color: Colors.white,
-                  shadows: [
-                    Shadow(
-                      color: Colors.black26,
-                      blurRadius: 4,
-                      offset: Offset(1, 1),
-                    ),
-                  ],
-                ),
-              )
+            ? const Icon(Icons.check_rounded, size: 18, color: Colors.white)
             : null,
       ),
     );
-  }
-
-  void _showVoiceCloningDialog() {
-    final nameController = TextEditingController();
-    double customPitch = 1.0;
-    double customRate = 0.5;
-
-    showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) {
-          return AlertDialog(
-            title: const Text('Create Voice Profile'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Create a custom voice profile by adjusting tone and speed to match your preference.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Profile Name',
-                    hintText: 'e.g., My AI Voice',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text('Tone (Pitch)'),
-                Slider(
-                  value: customPitch,
-                  min: 0.5,
-                  max: 2.0,
-                  onChanged: (v) => setState(() => customPitch = v),
-                ),
-                const Text('Speed (Rate)'),
-                Slider(
-                  value: customRate,
-                  min: 0.1,
-                  max: 1.0,
-                  onChanged: (v) => setState(() => customRate = v),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  if (nameController.text.isNotEmpty) {
-                    _addCustomVoice(
-                      nameController.text,
-                      customPitch,
-                      customRate,
-                    );
-                    Navigator.pop(context);
-                  }
-                },
-                child: const Text('Create Profile'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  void _addCustomVoice(String name, double pitch, double rate) {
-    // Determine a base voice (using current selected or default)
-    // We add a "custom" tag to it.
-    // Since we can't actually CREATE a TTS voice at OS level,
-    // we will save this preset in our app state.
-
-    // In a real app with backend, this would upload audio/get a token.
-
-    final customVoiceMap = {
-      'name': '🤖 $name (Custom)',
-      'locale': 'en-US', // Default
-      'isCustom': true,
-      'pitch': pitch,
-      'rate': rate,
-    };
-
-    setState(() {
-      _voices.insert(0, customVoiceMap);
-      _changeVoice(customVoiceMap);
-      _speed = rate;
-      _pitch = pitch;
-    });
-
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Voice Profile "$name" created!')));
   }
 }
