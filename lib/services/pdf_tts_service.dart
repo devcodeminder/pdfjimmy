@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
+import 'package:translator/translator.dart';
 import 'dart:io';
 import 'dart:math';
 import '../models/reading_stats.dart';
@@ -43,6 +44,11 @@ class PdfTtsService {
   DateTime? _readingStartTime;
   int _totalWordsRead = 0;
   int _totalSentencesRead = 0;
+
+  // Translation-while-reading
+  bool _translationModeEnabled = false;
+  String _translationTargetLanguage = 'ta'; // default Tamil
+  final GoogleTranslator _googleTranslator = GoogleTranslator();
 
   // Callbacks
   Function(int currentPage, int totalPages)? onPageComplete;
@@ -104,11 +110,7 @@ class PdfTtsService {
         _tts.setCompletionHandler(() {
           if (_isReading && !_isPaused) {
             _currentSentenceIndex++;
-            if (_currentSentenceIndex < _sentences.length) {
-              _speakNextSentence();
-            } else {
-              stop();
-            }
+            _speakNextSentence();
           }
         });
       }
@@ -477,15 +479,42 @@ class PdfTtsService {
           .where((w) => w.trim().isNotEmpty)
           .toList();
 
+      // --- TRANSLATION MODE ---
+      // If translation mode is on, translate the sentence to the target language
+      // and set TTS language accordingly before speaking.
+      String textToSpeakFinal = normalizedText;
+      if (_translationModeEnabled) {
+        try {
+          print(
+            'PdfTtsService: Translation mode ON → translating to $_translationTargetLanguage',
+          );
+          final translated = await _googleTranslator.translate(
+            normalizedText,
+            to: _translationTargetLanguage,
+          );
+          textToSpeakFinal = translated.text;
+          // Map language code to TTS locale
+          final ttsLang = _ttsLocaleFor(_translationTargetLanguage);
+          await _tts.setLanguage(ttsLang);
+          print(
+            'PdfTtsService: Translated [${_translationTargetLanguage}]: "${textToSpeakFinal.substring(0, min(40, textToSpeakFinal.length))}"',
+          );
+        } catch (e) {
+          print('PdfTtsService: Translation error, speaking original: $e');
+          textToSpeakFinal = normalizedText; // Fall back to original
+        }
+      }
+      // ---------------------------
+
       print(
-        'PdfTtsService: Speaking SENTENCE: "${normalizedText.substring(0, min(40, normalizedText.length))}..."',
+        'PdfTtsService: Speaking SENTENCE: "${textToSpeakFinal.substring(0, min(40, textToSpeakFinal.length))}..."',
       );
       print(
         'PdfTtsService: Sentence has ${sentence.wordBounds.length} word bounds, ${_currentSpokenWords.length} spoken words',
       );
 
       print('PdfTtsService: ▶️ STARTING to speak sentence...');
-      await _tts.speak(normalizedText);
+      await _tts.speak(textToSpeakFinal);
       print('PdfTtsService: ✅ FINISHED speaking sentence');
 
       // Platform-specific handling
@@ -814,6 +843,132 @@ class PdfTtsService {
     );
   }
 
+  /// Seek to the sentence closest to [tapY] (in PDF page Y-coordinates).
+  /// Stops the current utterance and restarts reading from the found sentence.
+  /// If sentences are not yet loaded, optionally loads [filePath]/[pageNumber] first.
+  ///
+  /// [screenY], [scrollOffsetY], [viewerWidth], [zoom], [pageIndex] are passed
+  /// so the service can recompute the correct pdfY after loading pageSize (needed
+  /// for first-tap accuracy when pageSize is not yet known from SfPdfViewer).
+  ///
+  /// Call this when the user taps on the PDF while the AI Reader is active.
+  Future<void> seekToTapPosition(
+    double tapY, {
+    String? filePath,
+    int? pageNumber,
+    int? totalPages,
+    // Raw screen-space params for recomputing pdfY after load
+    double? screenY,
+    double? scrollOffsetY,
+    double? viewerWidth,
+    double? zoom,
+    int? pageIndex,
+  }) async {
+    // If no sentences are loaded but we have the file info, load the page first
+    if (_sentences.isEmpty) {
+      if (filePath != null && pageNumber != null) {
+        print(
+          'PdfTtsService: seekToTapPosition — loading page $pageNumber before seek',
+        );
+        _isInitializing = true;
+        try {
+          _currentPageNumber = pageNumber;
+          _totalPages = totalPages ?? 0;
+          await _extractTextAndBounds(filePath, pageNumber);
+
+          // Detect and set language (same as readPage does)
+          if (_sentences.isNotEmpty) {
+            StringBuffer sampleText = StringBuffer();
+            for (var s in _sentences) {
+              sampleText.write(s.text);
+              if (sampleText.length > 500) break;
+            }
+            final detectedLang = _detectLanguage(sampleText.toString());
+            print(
+              'PdfTtsService: seekToTapPosition detected lang: $detectedLang',
+            );
+            try {
+              await _tts.setLanguage(detectedLang);
+            } catch (_) {}
+          }
+
+          _isReading = true;
+          _isPaused = false;
+        } finally {
+          _isInitializing = false;
+        }
+
+        // Recompute tapY now that we know the actual pageSize
+        if (screenY != null &&
+            scrollOffsetY != null &&
+            viewerWidth != null &&
+            zoom != null &&
+            pageIndex != null &&
+            _currentPageSize.width > 0) {
+          final double renderScale =
+              (viewerWidth / _currentPageSize.width) * zoom;
+          final double pageHeightPx = _currentPageSize.height * renderScale;
+          final double spacing = 4.0 * zoom;
+          final double pageTopY = pageIndex * (pageHeightPx + spacing);
+          final double recomputedY =
+              (screenY + scrollOffsetY - pageTopY) / renderScale;
+          print(
+            'PdfTtsService: seekToTapPosition — recomputed pdfY=$recomputedY '
+            '(was tapY=$tapY) after loading pageSize=${_currentPageSize}',
+          );
+          tapY = recomputedY; // Use the accurate value
+        }
+      } else {
+        print(
+          'PdfTtsService: seekToTapPosition — no sentences loaded and no file info provided',
+        );
+        return;
+      }
+    }
+
+    // Find the sentence whose bounding box is closest to the tap Y
+    int bestIndex = 0;
+    double bestDist = double.infinity;
+
+    for (int i = 0; i < _sentences.length; i++) {
+      final s = _sentences[i];
+      if (s.wordBounds.isEmpty) continue;
+
+      // Use the first wordBound's top as the sentence Y
+      final sentenceTop = s.wordBounds.first.bounds.top;
+      final sentenceBottom = s.wordBounds.last.bounds.bottom;
+      final sentenceMid = (sentenceTop + sentenceBottom) / 2;
+
+      // Check if tap is inside the sentence bounds
+      if (tapY >= sentenceTop && tapY <= sentenceBottom) {
+        bestIndex = i;
+        bestDist = 0;
+        break;
+      }
+
+      final dist = (sentenceMid - tapY).abs();
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIndex = i;
+      }
+    }
+
+    print(
+      'PdfTtsService: seekToTapPosition tapY=$tapY → sentence $bestIndex (dist=$bestDist)',
+    );
+
+    // Stop current TTS, update index, and restart
+    _isReading = false;
+    await _tts.stop();
+    await Future.delayed(const Duration(milliseconds: 100));
+
+    _currentSentenceIndex = bestIndex;
+    _isReading = true;
+    _isPaused = false;
+
+    await _speakNextSentence();
+  }
+
   /// Pause the current reading
   Future<void> pause() async {
     print('PdfTtsService: Pause requested');
@@ -1036,9 +1191,63 @@ class PdfTtsService {
   // Getters
   bool get isReading => _isReading;
   bool get isPaused => _isPaused;
+  bool get hasSentencesLoaded => _sentences.isNotEmpty;
+
+  /// 0-based index of the page currently being read by TTS.
+  /// Use this (not the viewer's currentPage) for the highlight overlay
+  /// so the highlight stays on the correct page even if the viewer has
+  /// scrolled or the page has auto-advanced.
+  int get currentPageIndex =>
+      (_currentPageNumber - 1).clamp(0, _totalPages > 0 ? _totalPages - 1 : 0);
   double get speechRate => _speechRate;
   double get pitch => _pitch;
   double get volume => _volume;
+  bool get translationModeEnabled => _translationModeEnabled;
+  String get translationTargetLanguage => _translationTargetLanguage;
+
+  /// Enable or disable translation-while-reading mode.
+  void setTranslationMode(bool enabled) {
+    _translationModeEnabled = enabled;
+    print(
+      'PdfTtsService: Translation mode ${enabled ? "ENABLED" : "DISABLED"} → target: $_translationTargetLanguage',
+    );
+  }
+
+  /// Set the language to translate sentences into when translation mode is on.
+  /// [languageCode] is a BCP-47 language subtag like 'ta', 'hi', 'en'.
+  void setTranslationTargetLanguage(String languageCode) {
+    _translationTargetLanguage = languageCode;
+    print('PdfTtsService: Translation target language set to $languageCode');
+  }
+
+  /// Map a short language code (e.g. 'ta') to a full TTS locale (e.g. 'ta-IN').
+  String _ttsLocaleFor(String langCode) {
+    const map = {
+      'ta': 'ta-IN',
+      'hi': 'hi-IN',
+      'te': 'te-IN',
+      'ml': 'ml-IN',
+      'kn': 'kn-IN',
+      'bn': 'bn-IN',
+      'mr': 'mr-IN',
+      'gu': 'gu-IN',
+      'pa': 'pa-IN',
+      'ur': 'ur-PK',
+      'ar': 'ar-SA',
+      'zh': 'zh-CN',
+      'zh-cn': 'zh-CN',
+      'ja': 'ja-JP',
+      'ko': 'ko-KR',
+      'fr': 'fr-FR',
+      'de': 'de-DE',
+      'es': 'es-ES',
+      'pt': 'pt-BR',
+      'it': 'it-IT',
+      'ru': 'ru-RU',
+      'en': 'en-US',
+    };
+    return map[langCode] ?? 'en-US';
+  }
 
   /// Dispose and clean up resources
   void dispose() {

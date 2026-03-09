@@ -1307,9 +1307,16 @@ class _CropScreenState extends State<CropScreen> {
         child: Crop(
           image: widget.imageBytes,
           controller: _cropController,
-          onCropped: (croppedData) {
-            widget.onCropped(croppedData);
-            Navigator.pop(context);
+          onCropped: (CropResult croppedData) {
+            if (croppedData is CropSuccess) {
+              widget.onCropped(croppedData.croppedImage);
+              Navigator.pop(context);
+            } else if (croppedData is CropFailure) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text('Failed to crop image')));
+              Navigator.pop(context);
+            }
           },
           withCircleUi: false,
           baseColor: Colors.blue.withValues(alpha: 0.8),

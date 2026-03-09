@@ -85,6 +85,14 @@ class ImageProcessor {
   static Future<String> rotate(String imagePath, int angle) async {
     return compute(_rotateTask, _RotateRequest(imagePath, angle));
   }
+
+  /// Compresses an image to the given JPEG quality (0-100) and returns new path.
+  static Future<String> compressImage(
+    String imagePath, {
+    int quality = 60,
+  }) async {
+    return compute(_compressTask, _CompressRequest(imagePath, quality));
+  }
 }
 
 class _RotateRequest {
@@ -118,4 +126,23 @@ class _ProcessRequest {
   final FilterType filter;
 
   _ProcessRequest(this.path, this.filter);
+}
+
+class _CompressRequest {
+  final String path;
+  final int quality;
+  _CompressRequest(this.path, this.quality);
+}
+
+String _compressTask(_CompressRequest req) {
+  final file = File(req.path);
+  final bytes = file.readAsBytesSync();
+  final image = img.decodeImage(bytes);
+  if (image == null) return req.path;
+
+  final compressed = img.encodeJpg(image, quality: req.quality);
+  final newPath =
+      '${req.path}_compressed_${req.quality}_${DateTime.now().millisecondsSinceEpoch}.jpg';
+  File(newPath).writeAsBytesSync(compressed);
+  return newPath;
 }

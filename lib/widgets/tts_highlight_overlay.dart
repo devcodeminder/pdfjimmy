@@ -5,13 +5,18 @@ import 'package:flutter/material.dart';
 /// COORDINATE SYSTEM NOTES:
 /// - Syncfusion PdfTextExtractor returns word bounds in PDF points (1pt = 1/72 inch)
 /// - Syncfusion SfPdfViewer renders the PDF scaled to fit the widget width
-/// - The renderScale converts: PDF points → logical pixels
-/// - scrollOffset from PdfViewerController.scrollOffset.dy is in logical pixels
+/// - The renderScale converts: PDF points → logical pixels (includes zoom)
+/// - scrollOffset from PdfViewerController.scrollOffset is a full Offset:
+///     .dy = vertical scroll in zoomed logical pixels
+///     .dx = horizontal scroll in zoomed logical pixels (non-zero when zoomed+panned)
+/// - At zoom > 1, horizontal scroll (dx) MUST be subtracted from X positions
+///   because the page content is wider than the viewport.
 class TtsHighlightOverlay extends StatelessWidget {
   final List<Rect> highlightRects; // In PDF points (from PdfTextExtractor)
   final Size pageSize; // In PDF points (from PdfPage.size)
-  final int pageIndex; // 0-based page index
-  final double scrollOffset; // In logical pixels (from PdfViewerController)
+  final int pageIndex; // 0-based page index of the page being READ (not viewed)
+  final Offset
+  scrollOffset; // Full Offset: dx=horizontal, dy=vertical (zoomed px)
   final double zoomLevel; // From PdfViewerController.zoomLevel
   final Color highlightColor;
 
@@ -56,7 +61,7 @@ class _HighlightPainter extends CustomPainter {
   final List<Rect> highlightRects;
   final Size pageSize;
   final int pageIndex;
-  final double scrollOffset;
+  final Offset scrollOffset;
   final double zoomLevel;
   final Color highlightColor;
   final double viewerWidth;
@@ -76,54 +81,69 @@ class _HighlightPainter extends CustomPainter {
     if (pageSize.width <= 0 || pageSize.height <= 0) return;
     if (highlightRects.isEmpty) return;
 
-    // Scale factor: PDF points → logical pixels
-    // SfPdfViewer scales the PDF to fit the viewer width at zoom=1.0
+    // ── Coordinate System ─────────────────────────────────────────────────
+    // SfPdfViewer scale at zoom=1: PDF fits viewer width exactly.
+    // renderScale converts PDF points → zoomed logical pixels.
+    //   renderScale = (viewerWidth / pageSize.width) * zoomLevel
+    //
+    // Page geometry in zoomed pixel space:
+    //   pageTopY   = pageIndex * (pageHeightPx + spacing)
+    //   pageWidth  = pageSize.width  * renderScale   (may overflow viewport when zoom>1)
+    //   pageHeight = pageSize.height * renderScale
+    //
+    // Word position on screen (within this overlay's painted area):
+    //   screenLeft = rect.left  * renderScale - scrollOffset.dx   ← dx for zoom pan
+    //   screenTop  = rect.top   * renderScale + pageTopY - scrollOffset.dy
+    //   screenRight  = rect.right  * renderScale - scrollOffset.dx
+    //   screenBottom = rect.bottom * renderScale + pageTopY - scrollOffset.dy
+    // ──────────────────────────────────────────────────────────────────────
+
+    // Scale factor: PDF points → logical pixels (includes zoom)
     final double renderScale = (viewerWidth / pageSize.width) * zoomLevel;
 
-    // Inter-page spacing used by SfPdfViewer (approximately 4px at zoom=1)
+    // Inter-page spacing used by SfPdfViewer (approximately 4px at zoom=1,
+    // scales proportionally with zoom since all content coordinates scale).
     final double spacing = 4.0 * zoomLevel;
     final double pageHeightPx = pageSize.height * renderScale;
 
-    // Y position of the top of this page in the scrollable document
+    // Y-position of the TOP of the reading page in the scrollable document
     final double pageTopY = pageIndex * (pageHeightPx + spacing);
 
-    // Convert scroll offset to position within the painted area
-    final double offsetY = pageTopY - scrollOffset;
+    // Vertical offset to convert page-relative Y → overlay-relative Y
+    final double offsetY = pageTopY - scrollOffset.dy;
+
+    // Horizontal offset: when zoom > 1 user can pan horizontally.
+    // scrollOffset.dx is the horizontal pan in zoomed logical pixels.
+    final double offsetX = -scrollOffset.dx;
 
     // Fill paint
     final paint = Paint()
-      ..color = highlightColor.withOpacity(0.40)
+      ..color = highlightColor.withValues(alpha: 0.40)
       ..style = PaintingStyle.fill
       ..blendMode = BlendMode.multiply;
 
     // Border paint
     final borderPaint = Paint()
-      ..color = highlightColor.withOpacity(0.80)
+      ..color = highlightColor.withValues(alpha: 0.80)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
 
     for (final rect in highlightRects) {
-      // Scale the PDF-point rect to logical pixels
-      final double left = rect.left * renderScale;
-      final double top = rect.top * renderScale;
-      final double right = rect.right * renderScale;
-      final double bottom = rect.bottom * renderScale;
+      // Scale the PDF-point rect to logical pixels, then apply scroll offsets
+      final double left = rect.left * renderScale + offsetX;
+      final double top = rect.top * renderScale + offsetY;
+      final double right = rect.right * renderScale + offsetX;
+      final double bottom = rect.bottom * renderScale + offsetY;
 
-      // Apply page offset and scroll
-      final Rect screenRect = Rect.fromLTRB(
-        left,
-        top + offsetY,
-        right,
-        bottom + offsetY,
-      );
+      final Rect screenRect = Rect.fromLTRB(left, top, right, bottom);
 
-      // Skip rects that are completely outside the visible area
+      // Skip rects completely outside the visible area
       if (screenRect.bottom < 0 || screenRect.top > size.height) continue;
       if (screenRect.right < 0 || screenRect.left > size.width) continue;
 
-      // Small horizontal padding, no vertical padding (tight fit to word height)
-      final double px = 3.0;
-      final double py = 1.0;
+      // Small horizontal padding, tight vertical fit to word height
+      const double px = 3.0;
+      const double py = 1.0;
       final Rect paddedRect = Rect.fromLTRB(
         (screenRect.left - px).clamp(0.0, size.width),
         (screenRect.top - py).clamp(0.0, size.height),

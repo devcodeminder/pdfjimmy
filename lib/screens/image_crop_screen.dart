@@ -94,8 +94,17 @@ class _ImageCropScreenState extends State<ImageCropScreen> {
                 child: Crop(
                   image: widget.imageData,
                   controller: _cropController,
-                  onCropped: (croppedData) {
-                    Navigator.pop(context, croppedData);
+                  onCropped: (CropResult result) {
+                    if (result is CropSuccess) {
+                      Navigator.pop(context, result.croppedImage);
+                    } else if (result is CropFailure) {
+                      setState(() {
+                        _isProcessing = false;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Failed to crop image')),
+                      );
+                    }
                   },
                   aspectRatio: _selectedAspectRatio,
                   maskColor: Colors.black.withOpacity(0.7),

@@ -2,6 +2,7 @@ import 'package:pdfjimmy/services/offline_ai_service.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'dart:ui'; // Needed for BackdropFilter
@@ -102,6 +103,10 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
   final ActionHistoryManager _historyManager = ActionHistoryManager();
   final AutoScrollService _autoScrollService = AutoScrollService();
   final PdfTtsService _ttsService = PdfTtsService();
+
+  // GlobalKey to call seekToTapPosition on the TTS player
+  final GlobalKey<TtsPlayerWidgetState> _ttsPlayerKey =
+      GlobalKey<TtsPlayerWidgetState>();
 
   Color _ttsHighlightColor = Colors.greenAccent;
   List<Rect>? _currentTtsHighlightRects;
@@ -1100,7 +1105,7 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
                         child: GestureDetector(
                           onTap: () {}, // absorb tap — do nothing
                           child: TtsPlayerWidget(
-                            key: const ValueKey('tts_player'),
+                            key: _ttsPlayerKey,
                             filePath: widget.filePath,
                             currentPage: controller.currentPage,
                             totalPages: controller.totalPages,
@@ -1112,35 +1117,17 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
                               _pdfViewerController.clearSelection();
                               _searchResult?.clear();
                             },
-                            onWordSpoken: (word, start, end, allText, rects, pageSize) {
-                              print(
-                                'EnhancedPdfViewerScreen: onWordSpoken called',
-                              );
-                              print(
-                                'EnhancedPdfViewerScreen: Word: "$word", Rects: ${rects?.length ?? 0}, PageSize: $pageSize',
-                              );
-
-                              if (rects != null && rects.isNotEmpty) {
-                                print(
-                                  'EnhancedPdfViewerScreen: First rect: ${rects.first}',
-                                );
-                              }
-
-                              if (!mounted) {
-                                print(
-                                  'EnhancedPdfViewerScreen: Widget not mounted, skipping update',
-                                );
-                                return;
-                              }
-
-                              setState(() {
-                                _currentTtsHighlightRects = rects;
-                                _currentTtsPageSize = pageSize;
-                                print(
-                                  'EnhancedPdfViewerScreen: State updated - Rects: ${_currentTtsHighlightRects?.length ?? 0}, PageSize: $_currentTtsPageSize',
-                                );
-                              });
-                            },
+                            onWordSpoken:
+                                (word, start, end, allText, rects, pageSize) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    _currentTtsHighlightRects = rects;
+                                    _currentTtsPageSize = pageSize;
+                                  });
+                                  if (rects != null && rects.isNotEmpty) {
+                                    _autoScrollToHighlight(rects, pageSize);
+                                  }
+                                },
                             currentHighlightColor: _ttsHighlightColor,
                             onHighlightColorChanged: (color) {
                               setState(() => _ttsHighlightColor = color);
@@ -1160,6 +1147,59 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
           : null,
       floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
+  }
+
+  void _autoScrollToHighlight(List<Rect> rects, Size pageSize) {
+    if (rects.isEmpty || pageSize.width <= 0) return;
+
+    // Use the PDF viewport width (same as LayoutBuilder constraints in overlay)
+    // MediaQuery.size.width equals the viewport width on full-screen PDF viewers.
+    final double viewerWidth = MediaQuery.of(context).size.width;
+    final double zoomLevel = _pdfViewerController.zoomLevel;
+
+    // Scale factor: PDF points → logical pixels (must match overlay painter)
+    final double renderScale = (viewerWidth / pageSize.width) * zoomLevel;
+
+    // Inter-page spacing used by SfPdfViewer (approx. 4px at zoom=1)
+    final double spacing = 4.0 * zoomLevel;
+    final double pageHeightPx = pageSize.height * renderScale;
+
+    // Use TTS service's reading page (not viewer's visible page) to match overlay
+    final int pageIndex = _ttsService.currentPageIndex;
+
+    // Global Y offset of this page in the continuous scroll view
+    final double pageTopY = pageIndex * (pageHeightPx + spacing);
+
+    // Global Y boundaries of the current word
+    final double wordGlobalTopY = pageTopY + rects.first.top * renderScale;
+    final double wordGlobalBottomY =
+        pageTopY + rects.first.bottom * renderScale;
+
+    // Current scroll position and visible area
+    final double scrollY = _pdfViewerController.scrollOffset.dy;
+
+    // Visible height: Top app bar (~60) + bottom TTS player (~210) + margin
+    final double visibleHeight = MediaQuery.of(context).size.height - 300;
+
+    if (visibleHeight <= 0) return; // Safety check
+
+    // If word is below the visible area, scroll down
+    if (wordGlobalBottomY > scrollY + visibleHeight) {
+      // Put word closer to the top-middle of the screen
+      final double targetScrollY = wordGlobalTopY - (visibleHeight * 0.25);
+      _pdfViewerController.jumpTo(
+        xOffset: _pdfViewerController.scrollOffset.dx,
+        yOffset: targetScrollY,
+      );
+    }
+    // If word is above the visible area, scroll up
+    else if (wordGlobalTopY < scrollY) {
+      final double targetScrollY = wordGlobalTopY - (visibleHeight * 0.25);
+      _pdfViewerController.jumpTo(
+        xOffset: _pdfViewerController.scrollOffset.dx,
+        yOffset: targetScrollY < 0 ? 0 : targetScrollY,
+      );
+    }
   }
 
   Widget _buildPdfViewer(PdfController controller) {
@@ -1275,10 +1315,116 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
                           child: TtsHighlightOverlay(
                             highlightRects: _currentTtsHighlightRects!,
                             pageSize: _currentTtsPageSize,
-                            pageIndex: controller.currentPage,
-                            scrollOffset: _pdfViewerController.scrollOffset.dy,
+                            // Use the TTS service's reading page, NOT the viewer's
+                            // visible page. These differ when TTS auto-advances pages
+                            // before the viewer scrolls, causing a one-page Y-offset.
+                            pageIndex: _ttsService.currentPageIndex,
+                            // Pass the FULL Offset (dx+dy). dx is non-zero when the
+                            // user has zoomed in and panned horizontally — without it
+                            // the highlight X position is wrong on zoomed pages.
+                            scrollOffset: _pdfViewerController.scrollOffset,
                             zoomLevel: _pdfViewerController.zoomLevel,
                             highlightColor: _ttsHighlightColor,
+                          ),
+                        ),
+                      // Invisible tap overlay for sentence-seek while TTS is active
+                      if (_showTtsPlayer)
+                        Positioned.fill(
+                          child: LayoutBuilder(
+                            builder: (ctx, constraints) {
+                              return GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onTapDown: (details) {
+                                  // ─── Correct Coordinate Conversion ───
+                                  // The GestureDetector lives inside Padding(top:60)
+                                  // so localPosition.dy=0 is already the top of the
+                                  // PDF content area. No extra offset needed.
+                                  //
+                                  // TtsHighlightOverlay painter formula (forward):
+                                  //   screenY = pdfPt * renderScale + pageTopY - scrollOffset
+                                  //
+                                  // Inverse (what we need):
+                                  //   pdfPt = (screenY + scrollOffset - pageTopY) / renderScale
+                                  //
+                                  final double viewerWidth =
+                                      constraints.maxWidth;
+                                  final double scrollOffsetY =
+                                      _pdfViewerController.scrollOffset.dy;
+                                  final double zoom =
+                                      _pdfViewerController.zoomLevel;
+
+                                  // pageSize is known from the last word-spoken callback.
+                                  // Fall back to a rough estimate if not yet available.
+                                  final Size pageSize =
+                                      (_currentTtsPageSize != Size.zero)
+                                      ? _currentTtsPageSize
+                                      : _ttsService.currentPageSize;
+
+                                  final double renderScale = pageSize.width > 0
+                                      ? (viewerWidth / pageSize.width) * zoom
+                                      : zoom;
+
+                                  // Y of the top of the current viewed page in the
+                                  // continuous scroll coordinate space.
+                                  final double pageHeightPx =
+                                      pageSize.height * renderScale;
+                                  final double spacing = 4.0 * zoom;
+                                  final double pageTopY =
+                                      controller.currentPage *
+                                      (pageHeightPx + spacing);
+
+                                  final double screenY =
+                                      details.localPosition.dy;
+                                  final double pdfY =
+                                      (screenY + scrollOffsetY - pageTopY) /
+                                      renderScale;
+
+                                  print(
+                                    'AI Reader: Tap — screenY=$screenY scrollY=$scrollOffsetY '
+                                    'pageTopY=$pageTopY renderScale=$renderScale pdfY=$pdfY',
+                                  );
+
+                                  // Haptic feedback
+                                  HapticFeedback.mediumImpact();
+
+                                  // Show brief hint
+                                  ScaffoldMessenger.of(
+                                    context,
+                                  ).clearSnackBars();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: const Row(
+                                        children: [
+                                          Icon(
+                                            Icons.record_voice_over,
+                                            color: Colors.white,
+                                            size: 18,
+                                          ),
+                                          SizedBox(width: 8),
+                                          Text('Reading from tapped position…'),
+                                        ],
+                                      ),
+                                      backgroundColor:
+                                          Colors.deepOrange.shade700,
+                                      duration: const Duration(seconds: 2),
+                                      behavior: SnackBarBehavior.floating,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                  );
+
+                                  _ttsPlayerKey.currentState?.seekToTapPosition(
+                                    pdfY,
+                                    screenY: screenY,
+                                    scrollOffsetY: scrollOffsetY,
+                                    viewerWidth: viewerWidth,
+                                    zoom: zoom,
+                                    pageIndex: controller.currentPage,
+                                  );
+                                },
+                              );
+                            },
                           ),
                         ),
                     ],
@@ -1532,14 +1678,19 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
               child: Container(
                 padding: const EdgeInsets.all(24),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E293B), // Slate 800
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: Colors.deepOrange, width: 3),
+                  color: const Color(
+                    0xFF0F1115,
+                  ).withOpacity(0.95), // Deep dark glassy base
+                  borderRadius: BorderRadius.circular(32),
+                  border: Border.all(
+                    color: Colors.white.withOpacity(0.1),
+                    width: 1.5,
+                  ),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withOpacity(0.5),
-                      blurRadius: 20,
-                      offset: const Offset(0, 10),
+                      blurRadius: 30,
+                      offset: const Offset(0, 15),
                     ),
                   ],
                 ),
@@ -1548,178 +1699,228 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
                   children: [
                     // Header
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.deepOrange.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Colors.deepOrange.withOpacity(0.5),
-                        ),
-                      ),
-                      child: const Text(
-                        'MENU',
-                        style: TextStyle(
-                          color: Colors.deepOrange,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 2,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 10,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFFFF3B30), Color(0xFFFF9500)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFFFF3B30).withOpacity(0.3),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: const Text(
+                            'QUICK ACTIONS',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontFamily: 'Outfit',
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                        )
+                        .animate()
+                        .fadeIn(duration: 400.ms)
+                        .slideY(begin: -0.2, curve: Curves.easeOutBack),
+                    const SizedBox(height: 32),
 
                     // Grid Options
-                    Wrap(
-                      spacing: 16,
-                      runSpacing: 16,
-                      alignment: WrapAlignment.center,
-                      children: [
-                        _buildGameMenuButton(
-                          icon: Icons.grid_view_rounded,
-                          label: 'Pages',
-                          color: Colors.pink,
-                          onTap: () => setState(
-                            () => _showThumbnails = !_showThumbnails,
-                          ),
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.bookmark_border_rounded,
-                          label: 'Bookmarks',
-                          color: Colors.blue,
-                          onTap: () =>
-                              setState(() => _showBookmarks = !_showBookmarks),
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.note_alt_outlined,
-                          label: 'Notes',
-                          color: Colors.purple,
-                          onTap: () => setState(() => _showNotes = !_showNotes),
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.record_voice_over_rounded,
-                          label: 'Read',
-                          color: Colors.teal,
-                          onTap: () =>
-                              setState(() => _showTtsPlayer = !_showTtsPlayer),
-                        ),
-                        _buildGameMenuButton(
-                          icon: _isNightMode
-                              ? Icons.light_mode_rounded
-                              : Icons.dark_mode_rounded,
-                          label: 'Theme',
-                          color: Colors.indigo,
-                          onTap: _toggleNightMode,
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.rotate_right_rounded,
-                          label: 'Rotate',
-                          color: Colors.amber,
-                          onTap: _rotatePdf,
-                        ),
-                        _buildGameMenuButton(
-                          icon: _scrollLock
-                              ? Icons.lock_open_rounded
-                              : Icons.lock_outline_rounded,
-                          label: _scrollLock ? 'Unlock' : 'Lock',
-                          color: Colors.redAccent,
-                          onTap: () =>
-                              setState(() => _scrollLock = !_scrollLock),
-                        ),
-                        _buildGameMenuButton(
-                          icon: _autoScrollService.isScrolling
-                              ? Icons.stop_circle_outlined
-                              : Icons.slideshow_rounded,
-                          label: _autoScrollService.isScrolling
-                              ? 'Stop Scroll'
-                              : 'Auto Scroll',
-                          color: Colors.amberAccent.shade700,
-                          onTap: () => _toggleAutoScroll(controller),
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.translate_rounded,
-                          label: 'Translate',
-                          color: Colors.lightGreen,
-                          onTap: () {
-                            if (controller.currentFilePath != null) {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => AITranslationScreen(
-                                    filePath: widget.filePath,
-                                    fileName: FileHelper.getFileName(
-                                      widget.filePath,
+                    Flexible(
+                      child: SingleChildScrollView(
+                        child: Wrap(
+                          spacing: 20,
+                          runSpacing: 24,
+                          alignment: WrapAlignment.center,
+                          children:
+                              [
+                                    _buildGameMenuButton(
+                                      icon: Icons.grid_view_rounded,
+                                      label: 'Pages',
+                                      color: Colors.pink,
+                                      onTap: () => setState(
+                                        () =>
+                                            _showThumbnails = !_showThumbnails,
+                                      ),
                                     ),
-                                    initialPage: controller.currentPage,
+                                    _buildGameMenuButton(
+                                      icon: Icons.bookmark_border_rounded,
+                                      label: 'Bookmarks',
+                                      color: Colors.blue,
+                                      onTap: () => setState(
+                                        () => _showBookmarks = !_showBookmarks,
+                                      ),
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.note_alt_outlined,
+                                      label: 'Notes',
+                                      color: Colors.purple,
+                                      onTap: () => setState(
+                                        () => _showNotes = !_showNotes,
+                                      ),
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.record_voice_over_rounded,
+                                      label: 'Read',
+                                      color: Colors.teal,
+                                      onTap: () => setState(
+                                        () => _showTtsPlayer = !_showTtsPlayer,
+                                      ),
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: _isNightMode
+                                          ? Icons.light_mode_rounded
+                                          : Icons.dark_mode_rounded,
+                                      label: 'Theme',
+                                      color: Colors.indigo,
+                                      onTap: _toggleNightMode,
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.rotate_right_rounded,
+                                      label: 'Rotate',
+                                      color: Colors.amber,
+                                      onTap: _rotatePdf,
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: _scrollLock
+                                          ? Icons.lock_open_rounded
+                                          : Icons.lock_outline_rounded,
+                                      label: _scrollLock ? 'Unlock' : 'Lock',
+                                      color: Colors.redAccent,
+                                      onTap: () => setState(
+                                        () => _scrollLock = !_scrollLock,
+                                      ),
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: _autoScrollService.isScrolling
+                                          ? Icons.stop_circle_outlined
+                                          : Icons.slideshow_rounded,
+                                      label: _autoScrollService.isScrolling
+                                          ? 'Stop Scroll'
+                                          : 'Auto Scroll',
+                                      color: Colors.amberAccent.shade700,
+                                      onTap: () =>
+                                          _toggleAutoScroll(controller),
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.translate_rounded,
+                                      label: 'Translate',
+                                      color: Colors.lightGreen,
+                                      onTap: () {
+                                        if (controller.currentFilePath !=
+                                            null) {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (context) =>
+                                                  AITranslationScreen(
+                                                    filePath: widget.filePath,
+                                                    fileName:
+                                                        FileHelper.getFileName(
+                                                          widget.filePath,
+                                                        ),
+                                                    initialPage:
+                                                        controller.currentPage,
+                                                  ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.accessibility_new_rounded,
+                                      label: 'Access',
+                                      color: Colors.deepPurpleAccent,
+                                      onTap: _showAccessibilityDialog,
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.print_rounded,
+                                      label: 'Print',
+                                      color: Colors.orange,
+                                      onTap: _printPdf,
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.save_as_rounded,
+                                      label: 'Export',
+                                      color: Colors.cyan,
+                                      onTap: _exportSignedPdf,
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.info_outline_rounded,
+                                      label: 'Info',
+                                      color: Colors.blueGrey,
+                                      onTap: () =>
+                                          _showDocumentInfo(controller),
+                                    ),
+                                    _buildGameMenuButton(
+                                      icon: Icons.touch_app_rounded,
+                                      label: 'Gestures',
+                                      color: Colors.brown,
+                                      onTap: _showGestureSettingsDialog,
+                                    ),
+                                  ]
+                                  .animate(interval: 40.ms)
+                                  .fadeIn(duration: 400.ms)
+                                  .scale(
+                                    begin: const Offset(0.5, 0.5),
+                                    curve: Curves.easeOutBack,
+                                    duration: 600.ms,
+                                  )
+                                  .moveY(
+                                    begin: 15,
+                                    curve: Curves.easeOutBack,
+                                    duration: 600.ms,
                                   ),
-                                ),
-                              );
-                            }
-                          },
                         ),
-                        _buildGameMenuButton(
-                          icon: Icons.accessibility_new_rounded,
-                          label: 'Access',
-                          color: Colors.deepPurpleAccent,
-                          onTap: _showAccessibilityDialog,
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.print_rounded,
-                          label: 'Print',
-                          color: Colors.orange,
-                          onTap: _printPdf,
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.save_as_rounded,
-                          label: 'Export',
-                          color: Colors.cyan,
-                          onTap: _exportSignedPdf,
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.info_outline_rounded,
-                          label: 'Info',
-                          color: Colors.blueGrey,
-                          onTap: () => _showDocumentInfo(controller),
-                        ),
-                        _buildGameMenuButton(
-                          icon: Icons.touch_app_rounded,
-                          label: 'Gestures',
-                          color: Colors.brown,
-                          onTap: _showGestureSettingsDialog,
-                        ),
-                      ],
+                      ),
                     ),
                     const SizedBox(height: 24),
 
                     // Close Button
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            side: const BorderSide(
-                              color: Colors.redAccent,
-                              width: 2,
-                            ),
-                          ),
-                          elevation: 0,
-                        ),
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text(
-                          'CLOSE MENU',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                            color: Colors.redAccent,
-                          ),
-                        ),
-                      ),
+                      child:
+                          ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white.withOpacity(
+                                    0.05,
+                                  ),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 18,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(20),
+                                    side: BorderSide(
+                                      color: Colors.white.withOpacity(0.1),
+                                      width: 1.5,
+                                    ),
+                                  ),
+                                  elevation: 0,
+                                ),
+                                onPressed: () => Navigator.pop(context),
+                                child: const Text(
+                                  'CLOSE MENU',
+                                  style: TextStyle(
+                                    fontFamily: 'Outfit',
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.5,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              )
+                              .animate()
+                              .fadeIn(delay: 500.ms)
+                              .slideY(begin: 0.3, curve: Curves.easeOutBack),
                     ),
                   ],
                 ),
@@ -1747,19 +1948,34 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
         mainAxisSize: MainAxisSize.min,
         children: [
           _buildGameStyleButton(
-            icon: icon,
-            color: color,
-            size: 60,
-            iconSize: 28,
-            onTap: null, // Tap handled by outer gesture detector
-          ),
-          const SizedBox(height: 8),
+                icon: icon,
+                color: color,
+                size: 64, // Increased size for better presence
+                iconSize: 28,
+                onTap: null, // Tap handled by outer gesture detector
+              )
+              .animate(onPlay: (controller) => controller.repeat(reverse: true))
+              .moveY(
+                begin: 0,
+                end: -6,
+                duration: 1200.ms,
+                curve: Curves.easeInOut,
+              )
+              .scale(
+                begin: const Offset(1, 1),
+                end: const Offset(1.05, 1.05),
+                duration: 1200.ms,
+                curve: Curves.easeInOut,
+              ),
+          const SizedBox(height: 12),
           Text(
             label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+            style: TextStyle(
+              color: Colors.grey[300],
+              fontFamily: 'Outfit',
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
             ),
           ),
         ],
@@ -1925,60 +2141,162 @@ class _EnhancedPdfViewerScreenState extends State<EnhancedPdfViewerScreen>
   Widget _buildSearchBar() {
     return Positioned(
       top: MediaQuery.of(context).padding.top + 56,
-      left: 10,
-      right: 10,
-      child: Material(
-        elevation: 8,
-        borderRadius: BorderRadius.circular(8),
+      left: 16,
+      right: 16,
+      child:
+          ClipRRect(
+                borderRadius: BorderRadius.circular(20),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _isNightMode
+                          ? const Color(0xFF0F1115).withValues(alpha: 0.75)
+                          : Colors.white.withValues(alpha: 0.85),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: _isNightMode
+                            ? Colors.white.withValues(alpha: 0.15)
+                            : Colors.black.withValues(alpha: 0.1),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.15),
+                          blurRadius: 20,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        const SizedBox(width: 12),
+                        Icon(
+                          Icons.search_rounded,
+                          color: Colors.purpleAccent.shade100,
+                          size: 22,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Material(
+                            type: MaterialType.transparency,
+                            child: TextField(
+                              controller: _searchController,
+                              focusNode: _searchFocusNode,
+                              style: TextStyle(
+                                color: _isNightMode
+                                    ? Colors.white
+                                    : Colors.black87,
+                                fontFamily: 'Outfit',
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              cursorColor: Colors.purpleAccent,
+                              decoration: InputDecoration(
+                                hintText: 'Search document...',
+                                hintStyle: TextStyle(
+                                  color: _isNightMode
+                                      ? Colors.white.withValues(alpha: 0.4)
+                                      : Colors.black54,
+                                  fontFamily: 'Outfit',
+                                ),
+                                border: InputBorder.none,
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(
+                                  vertical: 12,
+                                ),
+                                suffixText: _searchResult != null
+                                    ? '${_searchResult!.currentInstanceIndex + 1}/${_searchResult!.totalInstanceCount}'
+                                    : null,
+                                suffixStyle: const TextStyle(
+                                  color: Colors.purpleAccent,
+                                  fontWeight: FontWeight.bold,
+                                  fontFamily: 'Outfit',
+                                ),
+                              ),
+                              onChanged: (value) => _performSearch(value),
+                              onSubmitted: (value) => _performSearch(value),
+                            ),
+                          ),
+                        ),
+                        if (_searchResult != null) ...[
+                          Container(
+                            width: 1,
+                            height: 24,
+                            color: _isNightMode
+                                ? Colors.white.withValues(alpha: 0.2)
+                                : Colors.black.withValues(alpha: 0.1),
+                            margin: const EdgeInsets.symmetric(horizontal: 4),
+                          ),
+                          _buildSearchIconButton(
+                            icon: Icons.keyboard_arrow_up_rounded,
+                            color: _isNightMode
+                                ? Colors.white70
+                                : Colors.black87,
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              _searchResult!.previousInstance();
+                            },
+                          ),
+                          _buildSearchIconButton(
+                            icon: Icons.keyboard_arrow_down_rounded,
+                            color: _isNightMode
+                                ? Colors.white70
+                                : Colors.black87,
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              _searchResult!.nextInstance();
+                            },
+                          ),
+                        ],
+                        Container(
+                          width: 1,
+                          height: 24,
+                          color: _isNightMode
+                              ? Colors.white.withValues(alpha: 0.2)
+                              : Colors.black.withValues(alpha: 0.1),
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
+                        ),
+                        _buildSearchIconButton(
+                          icon: Icons.close_rounded,
+                          color: Colors.redAccent,
+                          onTap: () {
+                            HapticFeedback.lightImpact();
+                            setState(() => _showSearch = false);
+                            _searchController.clear();
+                            _clearSearch();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+              .animate()
+              .fadeIn(duration: 300.ms)
+              .slideY(begin: -0.2, curve: Curves.easeOutBack),
+    );
+  }
+
+  Widget _buildSearchIconButton({
+    required IconData icon,
+    required VoidCallback onTap,
+    Color? color,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        splashColor: (color ?? Colors.white).withValues(alpha: 0.2),
+        highlightColor: (color ?? Colors.white).withValues(alpha: 0.1),
         child: Container(
           padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  focusNode: _searchFocusNode,
-                  decoration: InputDecoration(
-                    hintText: 'Search text...',
-                    border: const OutlineInputBorder(),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    suffixText: _searchResult != null
-                        ? '${_searchResult!.currentInstanceIndex + 1}/${_searchResult!.totalInstanceCount}'
-                        : null,
-                  ),
-                  onChanged: (value) => _performSearch(value),
-                  onSubmitted: (value) => _performSearch(value),
-                ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.keyboard_arrow_up),
-                onPressed: _searchResult != null
-                    ? () => _searchResult!.previousInstance()
-                    : null,
-              ),
-              IconButton(
-                icon: const Icon(Icons.keyboard_arrow_down),
-                onPressed: _searchResult != null
-                    ? () => _searchResult!.nextInstance()
-                    : null,
-              ),
-              IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () {
-                  setState(() => _showSearch = false);
-                  _searchController.clear();
-                  _clearSearch();
-                },
-              ),
-            ],
-          ),
+          child: Icon(icon, color: color ?? Colors.white70, size: 22),
         ),
       ),
     );

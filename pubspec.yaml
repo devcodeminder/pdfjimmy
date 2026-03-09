@@ -14,7 +14,7 @@ dependencies:
   get: any
   syncfusion_flutter_pdfviewer: ^27.1.48
   syncfusion_flutter_pdf: ^27.1.48
-  path_provider: any
+  path_provider: ^2.1.5
   file_picker: any
   animated_text_kit: any
   google_fonts: ^6.3.2
@@ -25,7 +25,7 @@ dependencies:
   flutter_svg: any
   intl: any
   translator: ^1.0.4+1
-  image_picker: any
+  image_picker: ^1.2.1
   speech_to_text: ^7.1.0
   flutter_tts: any
   get_storage: any
@@ -35,11 +35,11 @@ dependencies:
   share_plus: any
   url_launcher: any
   permission_handler: ^12.0.1
-  path: any
+  path: ^1.9.1
   signature: ^5.4.0
   crypto: ^3.0.3
   uuid: any
-  crop_your_image: ^1.0.2
+  crop_your_image: ^2.0.0
   image: ^4.0.0
   video_player: ^2.8.6
   printing: ^5.13.4
@@ -48,20 +48,21 @@ dependencies:
   googleapis_auth: ^1.6.0
   extension_google_sign_in_as_googleapis_auth: ^2.0.12
   google_mlkit_document_scanner: ^0.2.0
-  google_mlkit_text_recognition: ^0.13.0
+  google_mlkit_text_recognition: ^0.15.1
   gap: ^3.0.1
   flutter_secure_storage: ^10.0.0
   flutter_bloc: ^9.1.1
   equatable: ^2.0.7
   sqflite_common_ffi: ^2.3.6
   camera: ^0.11.2+1
-  cunning_document_scanner: ^1.2.0
   flutter_animate: ^4.5.2
+  reorderable_grid_view: ^2.2.8
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
@@ -69,12 +70,7 @@ flutter:
     - assets/pdfjimmy.png
     - assets/splash.mp4
 
-flutter_icons:
-  image_path: icons/playstore.png
+flutter_launcher_icons:
+  image_path: "assets/pdfjimmy.png"
   android: true
   ios: true
-  macos: true
-  web: true
-  linux: true
-  windows: true
-  generate: true

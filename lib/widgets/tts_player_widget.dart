@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:pdfjimmy/services/pdf_tts_service.dart';
 
 class TtsPlayerWidget extends StatefulWidget {
@@ -27,10 +28,10 @@ class TtsPlayerWidget extends StatefulWidget {
   }) : super(key: key);
 
   @override
-  State<TtsPlayerWidget> createState() => _TtsPlayerWidgetState();
+  State<TtsPlayerWidget> createState() => TtsPlayerWidgetState();
 }
 
-class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
+class TtsPlayerWidgetState extends State<TtsPlayerWidget> {
   late final PdfTtsService _ttsService;
   bool _isPlaying = false;
   bool _isLoading = false;
@@ -38,8 +39,11 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
   double _pitch = 1.0;
   List<Map<Object?, Object?>> _voices = [];
   Map<Object?, Object?>? _readVoice; // voice for reading PDF
-  Map<Object?, Object?>? _translationVoice; // voice for translation
+  Map<Object?, Object?>? _translationVoice; // voice for translation language
   bool _showSettings = false;
+  bool _translationModeEnabled =
+      false; // whether to translate sentences while reading
+  final TextEditingController _langSearchController = TextEditingController();
 
   @override
   void initState() {
@@ -64,9 +68,44 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
           }
         };
 
-    _ttsService.onPageComplete = (int nextPage, int total) {
+    _ttsService.onPageComplete = (int nextPage, int total) async {
       if (mounted) {
-        widget.onPageChanged(nextPage);
+        // nextPage is 1-indexed. widget.onPageChanged expects 0-indexed.
+        widget.onPageChanged(nextPage - 1);
+
+        if (_ttsService.autoPageTurn) {
+          setState(() {
+            _isLoading = true;
+          });
+
+          // Small delay to allow the PDF viewer to visually move to the next page
+          await Future.delayed(const Duration(milliseconds: 500));
+
+          try {
+            await _ttsService.readPage(
+              widget.filePath,
+              nextPage, // readPage expects 1-indexed
+              totalPages: total,
+            );
+            if (mounted) {
+              setState(() {
+                _isLoading = false;
+                _isPlaying = true;
+              });
+            }
+          } catch (e) {
+            if (mounted) {
+              setState(() {
+                _isLoading = false;
+                _isPlaying = false;
+              });
+            }
+          }
+        } else {
+          setState(() {
+            _isPlaying = false;
+          });
+        }
       }
     };
 
@@ -200,9 +239,64 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
         _ttsService.switchVoiceWhileReading(voiceMap);
       } else {
         _ttsService.setTranslationVoice(voiceMap);
+        // Also update the target language in the service
+        final locale = voice['locale']?.toString() ?? '';
+        final langCode = locale.split('-').first.toLowerCase();
+        _ttsService.setTranslationTargetLanguage(langCode);
       }
     } catch (e) {
       print('Error converting voice map: $e');
+    }
+  }
+
+  /// Called by the parent screen when the user taps on the PDF while AI Reader
+  /// is active. [tapY] is the Y-position in PDF page coordinates.
+  ///
+  /// [screenY], [scrollOffsetY], [viewerWidth], [zoom], [pageIndex] are the raw
+  /// rendering params used to recompute pdfY accurately on first-tap (when pageSize
+  /// isn't yet known from the viewer).
+  Future<void> seekToTapPosition(
+    double tapY, {
+    double? screenY,
+    double? scrollOffsetY,
+    double? viewerWidth,
+    double? zoom,
+    int? pageIndex,
+  }) async {
+    print('TtsPlayerWidget: seekToTapPosition tapY=$tapY');
+
+    // Show loading indicator while we load sentences (first-tap scenario)
+    final bool needsLoad = !_ttsService.hasSentencesLoaded;
+    if (needsLoad && mounted) {
+      setState(() => _isLoading = true);
+    }
+
+    try {
+      await _ttsService.seekToTapPosition(
+        tapY,
+        filePath: widget.filePath,
+        pageNumber: widget.currentPage + 1, // convert 0-indexed → 1-indexed
+        totalPages: widget.totalPages,
+        screenY: screenY,
+        scrollOffsetY: scrollOffsetY,
+        viewerWidth: viewerWidth,
+        zoom: zoom,
+        pageIndex: pageIndex,
+      );
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isPlaying = true;
+        });
+      }
+    } catch (e) {
+      print('TtsPlayerWidget: seekToTapPosition error: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isPlaying = false;
+        });
+      }
     }
   }
 
@@ -210,6 +304,7 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
   void dispose() {
     print('TtsPlayerWidget: Dispose called');
     _ttsService.stop();
+    _langSearchController.dispose();
     super.dispose();
   }
 
@@ -307,69 +402,42 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                       Row(
                         children: [
                           Container(
-                            padding: const EdgeInsets.all(7),
+                            padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  Colors.amber.shade400,
-                                  Colors.orange.shade600,
-                                ],
-                              ),
+                              color: Theme.of(
+                                context,
+                              ).primaryColor.withOpacity(0.1),
                               shape: BoxShape.circle,
                             ),
-                            child: const Icon(
-                              Icons.auto_awesome,
-                              color: Colors.white,
-                              size: 16,
+                            child: Icon(
+                              Icons.auto_stories_rounded,
+                              color: Theme.of(context).primaryColor,
+                              size: 20,
                             ),
+                          ).animate().scale(
+                            duration: 400.ms,
+                            curve: Curves.easeOutBack,
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 12),
                           Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
                             children: [
                               Text(
                                 'AI Reader',
-                                style: Theme.of(context).textTheme.titleMedium
-                                    ?.copyWith(
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 0.3,
-                                      foreground: Paint()
-                                        ..shader =
-                                            LinearGradient(
-                                              colors: [
-                                                Theme.of(context).primaryColor,
-                                                Theme.of(
-                                                  context,
-                                                ).primaryColor.withOpacity(0.7),
-                                              ],
-                                            ).createShader(
-                                              const Rect.fromLTWH(
-                                                0,
-                                                0,
-                                                150,
-                                                50,
-                                              ),
-                                            ),
-                                    ),
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  color: isDark ? Colors.white : Colors.black87,
+                                  letterSpacing: 0.5,
+                                ),
                               ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 1,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Theme.of(
-                                    context,
-                                  ).primaryColor.withOpacity(0.15),
-                                  borderRadius: BorderRadius.circular(6),
-                                ),
-                                child: Text(
-                                  'Page ${widget.currentPage + 1}',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: Theme.of(context).primaryColor,
-                                  ),
+                              Text(
+                                'Page ${widget.currentPage + 1} of ${widget.totalPages}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: isDark ? Colors.white38 : Colors.grey,
                                 ),
                               ),
                             ],
@@ -378,6 +446,8 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
                       ),
                       Row(
                         children: [
+                          _buildTranslateToggleButton(),
+                          const SizedBox(width: 4),
                           _buildPremiumIconButton(
                             icon: _showSettings
                                 ? Icons.close
@@ -400,7 +470,10 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
 
                 if (_showSettings) ...[
                   const SizedBox(height: 12),
-                  _buildSettings(),
+                  _buildSettings()
+                      .animate()
+                      .fadeIn(duration: 300.ms)
+                      .slideY(begin: -0.1, end: 0),
                 ],
 
                 const SizedBox(height: 12),
@@ -418,81 +491,90 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
 
                     // Main Play/Pause Button - Premium 3D Style
                     GestureDetector(
-                      onTap: _togglePlay,
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: 56,
-                        height: 56,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Theme.of(context).primaryColor,
-                              Theme.of(context).primaryColor.withOpacity(0.7),
-                            ],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Theme.of(
-                                context,
-                              ).primaryColor.withOpacity(0.5),
-                              blurRadius: 20,
-                              offset: const Offset(0, 10),
-                              spreadRadius: 2,
-                            ),
-                            const BoxShadow(
-                              color: Colors.white38,
-                              blurRadius: 15,
-                              offset: Offset(-5, -5),
-                            ),
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
-                              blurRadius: 15,
-                              offset: const Offset(5, 5),
-                            ),
-                          ],
-                          border: Border.all(
-                            color: Colors.white.withOpacity(0.3),
-                            width: 2,
-                          ),
-                        ),
-                        child: _isLoading
-                            ? Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: CircularProgressIndicator(
-                                  color: Colors.white,
-                                  strokeWidth: 3,
-                                ),
-                              )
-                            : Container(
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: RadialGradient(
-                                    colors: [
-                                      Colors.white.withOpacity(0.2),
-                                      Colors.transparent,
-                                    ],
-                                  ),
-                                ),
-                                child: Icon(
-                                  _isPlaying
-                                      ? Icons.pause_rounded
-                                      : Icons.play_arrow_rounded,
-                                  color: Colors.white,
-                                  size: 28,
-                                  shadows: const [
-                                    Shadow(
-                                      color: Colors.black26,
-                                      blurRadius: 4,
-                                      offset: Offset(2, 2),
-                                    ),
-                                  ],
-                                ),
+                          onTap: _togglePlay,
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            width: 56,
+                            height: 56,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Theme.of(context).primaryColor,
+                                  Theme.of(
+                                    context,
+                                  ).primaryColor.withOpacity(0.7),
+                                ],
                               ),
-                      ),
-                    ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Theme.of(
+                                    context,
+                                  ).primaryColor.withOpacity(0.5),
+                                  blurRadius: 20,
+                                  offset: const Offset(0, 10),
+                                  spreadRadius: 2,
+                                ),
+                                const BoxShadow(
+                                  color: Colors.white38,
+                                  blurRadius: 15,
+                                  offset: Offset(-5, -5),
+                                ),
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.3),
+                                  blurRadius: 15,
+                                  offset: const Offset(5, 5),
+                                ),
+                              ],
+                              border: Border.all(
+                                color: Colors.white.withOpacity(0.3),
+                                width: 2,
+                              ),
+                            ),
+                            child: _isLoading
+                                ? Padding(
+                                        padding: const EdgeInsets.all(16),
+                                        child: CircularProgressIndicator(
+                                          color: Colors.white.withOpacity(0.9),
+                                          strokeWidth: 2.5,
+                                        ),
+                                      )
+                                      .animate(
+                                        onPlay: (controller) =>
+                                            controller.repeat(),
+                                      )
+                                      .rotate(duration: 1.seconds)
+                                : Container(
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      gradient: RadialGradient(
+                                        colors: [
+                                          Colors.white.withOpacity(0.2),
+                                          Colors.transparent,
+                                        ],
+                                      ),
+                                    ),
+                                    child: Icon(
+                                      _isPlaying
+                                          ? Icons.pause_rounded
+                                          : Icons.play_arrow_rounded,
+                                      color: Colors.white,
+                                      size: 30,
+                                      shadows: const [
+                                        Shadow(
+                                          color: Colors.black26,
+                                          blurRadius: 4,
+                                          offset: Offset(2, 2),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                          ),
+                        )
+                        .animate(target: _isPlaying ? 1 : 0)
+                        .shimmer(duration: 2.seconds, color: Colors.white12),
 
                     _buildControlButton(
                       icon: Icons.skip_next_rounded,
@@ -540,40 +622,95 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     );
   }
 
+  /// Translation toggle button shown in the header.
+  Widget _buildTranslateToggleButton() {
+    final isOn = _translationModeEnabled;
+    final color = isOn ? Colors.orange.shade400 : Colors.grey.shade400;
+    return GestureDetector(
+      onTap: () {
+        setState(() => _translationModeEnabled = !_translationModeEnabled);
+        _ttsService.setTranslationMode(_translationModeEnabled);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [color.withOpacity(0.25), color.withOpacity(0.1)],
+          ),
+          border: Border.all(
+            color: color.withOpacity(isOn ? 0.7 : 0.3),
+            width: 1.5,
+          ),
+          boxShadow: isOn
+              ? [
+                  BoxShadow(
+                    color: color.withOpacity(0.4),
+                    blurRadius: 10,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : [],
+        ),
+        child: Icon(Icons.translate_rounded, color: color, size: 18),
+      ),
+    );
+  }
+
   Widget _buildControlButton({
     required IconData icon,
     required VoidCallback onPressed,
     required double size,
   }) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Colors.grey.shade300, Colors.grey.shade200],
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return GestureDetector(
+      onTap: onPressed,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [const Color(0xFF2C2C2C), const Color(0xFF1A1A1A)]
+                : [const Color(0xFFF0F0F0), const Color(0xFFDCDCDC)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.2),
+              blurRadius: 10,
+              offset: const Offset(4, 4),
+            ),
+            BoxShadow(
+              color: isDark
+                  ? Colors.white.withOpacity(0.05)
+                  : Colors.white.withOpacity(0.8),
+              blurRadius: 10,
+              offset: const Offset(-4, -4),
+            ),
+          ],
+          border: Border.all(
+            color: isDark ? Colors.white10 : Colors.white.withOpacity(0.5),
+            width: 1.5,
+          ),
         ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
-          ),
-          const BoxShadow(
-            color: Colors.white70,
-            blurRadius: 8,
-            offset: Offset(-2, -2),
-          ),
-        ],
+        child: Icon(
+          icon,
+          size: size * 0.55,
+          color: isDark ? Colors.white70 : Colors.grey.shade700,
+        ),
       ),
-      child: IconButton(
-        icon: Icon(icon),
-        onPressed: onPressed,
-        iconSize: size * 0.5,
-        color: Colors.grey.shade700,
-      ),
+    ).animate().scale(
+      begin: const Offset(1, 1),
+      end: const Offset(0.92, 0.92),
+      duration: 150.ms,
+      curve: Curves.easeInOut,
     );
   }
 
@@ -613,6 +750,49 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     'en_f': {'name': 'Emma', 'emoji': '👩‍💼', 'color': 0xFFFF4081},
   };
 
+  static const Map<String, String> _languageNames = {
+    'en': 'English',
+    'fr': 'French',
+    'de': 'German',
+    'it': 'Italian',
+    'es': 'Spanish',
+    'pt': 'Portuguese',
+    'ru': 'Russian',
+    'ja': 'Japanese',
+    'ko': 'Korean',
+    'zh': 'Chinese',
+    'ar': 'Arabic',
+    'tr': 'Turkish',
+    'nl': 'Dutch',
+    'pl': 'Polish',
+    'sv': 'Swedish',
+    'da': 'Danish',
+    'fi': 'Finnish',
+    'no': 'Norwegian',
+    'el': 'Greek',
+    'he': 'Hebrew',
+    'th': 'Thai',
+    'vi': 'Vietnamese',
+    'id': 'Indonesian',
+    'hi': 'Hindi',
+    'bn': 'Bengali',
+    'ta': 'Tamil',
+    'te': 'Telugu',
+    'mr': 'Marathi',
+    'gu': 'Gujarati',
+    'kn': 'Kannada',
+    'ml': 'Malayalam',
+    'pa': 'Punjabi',
+    'ur': 'Urdu',
+    'as': 'Assamese',
+    'or': 'Odia',
+    'sa': 'Sanskrit',
+    'si': 'Sinhala',
+    'my': 'Burmese',
+    'km': 'Khmer',
+    'lo': 'Lao',
+  };
+
   static const Set<String> _englishFemaleNames = {
     'zira',
     'hazel',
@@ -626,36 +806,135 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     'female',
     'woman',
     'girl',
+    'siri',
+    'cortana',
+    'lisa',
+    'emma',
+    'emily',
   };
 
-  /// Get character data for a voice
+  static const Set<String> _englishMaleNames = {
+    'david',
+    'mark',
+    'george',
+    'james',
+    'guy',
+    'richard',
+    'fred',
+    'alex',
+    'daniel',
+    'rishi',
+    'oliver',
+    'thomas',
+    'male',
+    'man',
+  };
+
+  /// Get character data for a voice.
+  /// Checks injected '_isFemale' marker first (set by _deduplicatedVoices),
+  /// then falls back to name-based detection.
   Map<String, dynamic> _charData(Map<Object?, Object?> voice) {
-    final name = voice['name']?.toString().toLowerCase() ?? '';
     final locale = voice['locale']?.toString().toLowerCase() ?? '';
     final lang = locale.split('-').first;
 
     if (lang == 'en') {
-      final isFemale = _englishFemaleNames.any((n) => name.contains(n));
+      // Prefer the injected marker set during voice pool building
+      final forcedFemale = voice['_isFemale'];
+      bool isFemale;
+      if (forcedFemale != null) {
+        isFemale = forcedFemale == true;
+      } else {
+        final name = voice['name']?.toString().toLowerCase() ?? '';
+        final isFemaleByName = _englishFemaleNames.any((n) => name.contains(n));
+        final isMaleByName = _englishMaleNames.any((n) => name.contains(n));
+        // If name matches female → female. If matches male or neither → male.
+        isFemale = isFemaleByName && !isMaleByName;
+      }
       return _langCharacters[isFemale ? 'en_f' : 'en']!;
     }
     return _langCharacters[lang] ??
         {'name': 'Voice', 'emoji': '🎙️', 'color': 0xFF9E9E9E};
   }
 
-  /// Deduplicate voices: keep only the first (best) voice per language code.
+  /// Priority order for the voice card row.
+  /// English Male + Female always first, then top Indian & global languages.
+  static const List<String> _voicePriority = [
+    'en_m', // English Male
+    'en_f', // English Female
+    'ta', // Tamil
+    'hi', // Hindi
+    'te', // Telugu
+    'ml', // Malayalam
+    'kn', // Kannada
+    'bn', // Bengali
+    'fr', // French
+    'es', // Spanish
+  ];
+
+  /// Returns up to 10 curated voices: one per priority slot,
+  /// filtered from voices actually available on the device.
+  /// For English: takes device voices by INDEX (0 = Male, 1 = Female)
+  /// so it works even with code-named Google TTS voices.
   List<Map<Object?, Object?>> _deduplicatedVoices() {
+    // Separate English voices from the rest
+    final englishVoices = <Map<Object?, Object?>>[];
+    final pool = <String, Map<Object?, Object?>>{};
+
+    for (final voice in _voices) {
+      final locale = voice['locale']?.toString().toLowerCase() ?? '';
+      final lang = locale.split('-').first;
+      if (lang == 'en') {
+        // Try name-based first
+        final name = voice['name']?.toString().toLowerCase() ?? '';
+        final femaleByName = _englishFemaleNames.any((n) => name.contains(n));
+        final maleByName = _englishMaleNames.any((n) => name.contains(n));
+        if (femaleByName && !maleByName) {
+          pool.putIfAbsent('en_f', () => voice);
+        } else if (maleByName) {
+          pool.putIfAbsent('en_m', () => voice);
+        } else {
+          // Ambiguous name (Google TTS code names) → collect for index fallback
+          englishVoices.add(voice);
+        }
+      } else {
+        pool.putIfAbsent(lang, () => voice);
+      }
+    }
+
+    // Fill missing English slots using index order:
+    // first ambiguous voice → Male, second → Female
+    if (!pool.containsKey('en_m') && englishVoices.isNotEmpty) {
+      final v = Map<Object?, Object?>.from(englishVoices.first);
+      v['_isFemale'] = false; // inject gender marker
+      pool['en_m'] = v;
+      englishVoices.removeAt(0);
+    }
+    if (!pool.containsKey('en_f') && englishVoices.isNotEmpty) {
+      final v = Map<Object?, Object?>.from(englishVoices.first);
+      v['_isFemale'] = true; // inject gender marker
+      pool['en_f'] = v;
+    }
+
+    // Pick voices in priority order (skip missing ones)
+    final result = <Map<Object?, Object?>>[];
+    for (final key in _voicePriority) {
+      if (pool.containsKey(key)) {
+        result.add(pool[key]!);
+        if (result.length >= 10) break;
+      }
+    }
+    return result;
+  }
+
+  /// Get unique languages (one voice per language code)
+  List<Map<Object?, Object?>> _getUniqueLanguages() {
     final seen = <String>{};
     final result = <Map<Object?, Object?>>[];
     for (final voice in _voices) {
       final locale = voice['locale']?.toString().toLowerCase() ?? '';
       final lang = locale.split('-').first;
-      // For English, also differentiate male/female
-      final name = voice['name']?.toString().toLowerCase() ?? '';
-      final key = lang == 'en'
-          ? (_englishFemaleNames.any((n) => name.contains(n)) ? 'en_f' : 'en_m')
-          : lang;
-      if (!seen.contains(key)) {
-        seen.add(key);
+      if (!seen.contains(lang)) {
+        seen.add(lang);
         result.add(voice);
       }
     }
@@ -686,7 +965,16 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
         children: [
           // ── Read Voice ────────────────────────────────────────────
           if (_voices.isNotEmpty) ...[
-            _sectionLabel('📖 Read Voice', isDark),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _sectionLabel('📖 Voice', isDark),
+                _buildLanguagePickerButton(
+                  isDark: isDark,
+                  isTranslation: false,
+                ),
+              ],
+            ),
             const SizedBox(height: 8),
             _buildVoiceRow(
               isDark: isDark,
@@ -695,14 +983,10 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
             ),
             const SizedBox(height: 14),
 
-            // ── Translation Voice ─────────────────────────────────────
-            _sectionLabel('🌐 Translation Voice', isDark),
+            // ── Translation Language ─────────────────────────────────────
+            _sectionLabel('🌐 Translation Language', isDark),
             const SizedBox(height: 8),
-            _buildVoiceRow(
-              isDark: isDark,
-              selectedVoice: _translationVoice,
-              isTranslation: true,
-            ),
+            _buildLanguagePickerButton(isDark: isDark, isTranslation: true),
             const SizedBox(height: 14),
           ],
 
@@ -757,6 +1041,425 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
     );
   }
 
+  /// Builds a compact button that opens a language search dialog.
+  Widget _buildLanguagePickerButton({
+    required bool isDark,
+    bool isTranslation = true,
+  }) {
+    final primary = Theme.of(context).primaryColor;
+    final selectedVoice = isTranslation ? _translationVoice : _readVoice;
+    final selectedLocale = selectedVoice?['locale']?.toString() ?? '';
+    final selectedLang = selectedLocale.split('-').first.toLowerCase();
+    final selectedName =
+        _languageNames[selectedLang] ?? selectedLang.toUpperCase();
+    final hasSelection = selectedVoice != null;
+
+    return GestureDetector(
+      onTap: () => _showLanguageSearchDialog(isTranslation: isTranslation),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: hasSelection
+                ? [primary.withOpacity(0.15), primary.withOpacity(0.05)]
+                : isDark
+                ? [
+                    Colors.white.withOpacity(0.05),
+                    Colors.white.withOpacity(0.02),
+                  ]
+                : [Colors.grey.shade100, Colors.grey.shade50],
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: hasSelection
+                ? primary.withOpacity(0.4)
+                : (isDark ? Colors.white12 : Colors.grey.shade300),
+            width: hasSelection ? 1.5 : 1,
+          ),
+          boxShadow: hasSelection
+              ? [
+                  BoxShadow(
+                    color: primary.withOpacity(0.15),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ]
+              : [],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isTranslation
+                  ? Icons.language_rounded
+                  : Icons.record_voice_over_rounded,
+              size: 18,
+              color: hasSelection
+                  ? primary
+                  : (isDark ? Colors.white54 : Colors.grey.shade500),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              hasSelection
+                  ? selectedName
+                  : (isTranslation ? 'Choose Language' : 'Search Language'),
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: hasSelection
+                    ? primary
+                    : (isDark ? Colors.white60 : Colors.grey.shade600),
+              ),
+            ),
+            const SizedBox(width: 6),
+            Icon(
+              Icons.search_rounded,
+              size: 15,
+              color: hasSelection
+                  ? primary.withOpacity(0.7)
+                  : (isDark ? Colors.white38 : Colors.grey.shade400),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Opens a searchable language picker bottom sheet dialog.
+  void _showLanguageSearchDialog({bool isTranslation = true}) {
+    _langSearchController.clear();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final primary = Theme.of(context).primaryColor;
+    final languages = _getUniqueLanguages();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            // Filter languages based on search
+            final query = _langSearchController.text.toLowerCase();
+            final filtered = languages.where((voice) {
+              final locale = voice['locale']?.toString().toLowerCase() ?? '';
+              final lang = locale.split('-').first;
+              final name = (_languageNames[lang] ?? lang).toLowerCase();
+              return name.contains(query) || lang.contains(query);
+            }).toList();
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.65,
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF1A1A2E) : Colors.white,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(24),
+                ),
+                border: Border.all(
+                  color: isDark ? Colors.white10 : Colors.grey.shade200,
+                ),
+              ),
+              child: Column(
+                children: [
+                  // Handle bar
+                  Container(
+                    margin: const EdgeInsets.only(top: 12),
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white24 : Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Title
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
+                      children: [
+                        Icon(Icons.language_rounded, color: primary, size: 22),
+                        const SizedBox(width: 10),
+                        Text(
+                          'Choose Language',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : Colors.grey.shade900,
+                          ),
+                        ),
+                        const Spacer(),
+                        if ((isTranslation ? _translationVoice : _readVoice) !=
+                            null)
+                          GestureDetector(
+                            onTap: () {
+                              if (isTranslation) {
+                                setState(() => _translationVoice = null);
+                                _ttsService.setTranslationMode(false);
+                                setState(() => _translationModeEnabled = false);
+                              } else {
+                                setState(() => _readVoice = null);
+                                // Default to en-US if cleared
+                                _ttsService.setLanguage('en-US');
+                              }
+                              Navigator.pop(ctx);
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.red.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: Colors.red.withOpacity(0.3),
+                                ),
+                              ),
+                              child: Text(
+                                'Clear',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.red.shade400,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Search box
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: TextField(
+                      controller: _langSearchController,
+                      autofocus: true,
+                      onChanged: (_) => setModalState(() {}),
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.grey.shade900,
+                        fontSize: 14,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'Search language...',
+                        hintStyle: TextStyle(
+                          color: isDark ? Colors.white38 : Colors.grey.shade400,
+                          fontSize: 14,
+                        ),
+                        prefixIcon: Icon(
+                          Icons.search_rounded,
+                          color: isDark ? Colors.white38 : Colors.grey.shade400,
+                          size: 20,
+                        ),
+                        filled: true,
+                        fillColor: isDark
+                            ? Colors.white.withOpacity(0.07)
+                            : Colors.grey.shade100,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 10,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(
+                            color: primary.withOpacity(0.5),
+                            width: 1.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Language list
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.search_off_rounded,
+                                  size: 40,
+                                  color: isDark
+                                      ? Colors.white24
+                                      : Colors.grey.shade300,
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  'No languages found',
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? Colors.white38
+                                        : Colors.grey.shade400,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                            itemCount: filtered.length,
+                            itemBuilder: (_, i) {
+                              final voice = filtered[i];
+                              final locale = voice['locale']?.toString() ?? '';
+                              final langCode = locale
+                                  .split('-')
+                                  .first
+                                  .toLowerCase();
+                              final langName =
+                                  _languageNames[langCode] ??
+                                  langCode.toUpperCase();
+                              final char = _charData(voice);
+                              final charEmoji = char['emoji'] as String;
+                              final charColor = Color(char['color'] as int);
+
+                              final currentSelectedVoice = isTranslation
+                                  ? _translationVoice
+                                  : _readVoice;
+                              final selectedLocale =
+                                  currentSelectedVoice?['locale']?.toString() ??
+                                  '';
+                              final selectedLang = selectedLocale
+                                  .split('-')
+                                  .first
+                                  .toLowerCase();
+                              final isSelected = langCode == selectedLang;
+
+                              return GestureDetector(
+                                onTap: () {
+                                  _changeVoice(
+                                    voice,
+                                    isTranslation: isTranslation,
+                                  );
+                                  if (isTranslation &&
+                                      !_translationModeEnabled) {
+                                    setState(
+                                      () => _translationModeEnabled = true,
+                                    );
+                                    _ttsService.setTranslationMode(true);
+                                  }
+                                  Navigator.pop(ctx);
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 150),
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 12,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: isSelected
+                                          ? [
+                                              charColor.withOpacity(0.2),
+                                              charColor.withOpacity(0.08),
+                                            ]
+                                          : isDark
+                                          ? [
+                                              Colors.white.withOpacity(0.05),
+                                              Colors.white.withOpacity(0.02),
+                                            ]
+                                          : [Colors.grey.shade50, Colors.white],
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? charColor.withOpacity(0.5)
+                                          : (isDark
+                                                ? Colors.white10
+                                                : Colors.grey.shade200),
+                                      width: isSelected ? 1.5 : 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 38,
+                                        height: 38,
+                                        decoration: BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: charColor.withOpacity(
+                                            isSelected ? 0.2 : 0.1,
+                                          ),
+                                        ),
+                                        child: Center(
+                                          child: Text(
+                                            charEmoji,
+                                            style: const TextStyle(
+                                              fontSize: 20,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              langName,
+                                              style: TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: isSelected
+                                                    ? FontWeight.w700
+                                                    : FontWeight.w600,
+                                                color: isSelected
+                                                    ? charColor
+                                                    : (isDark
+                                                          ? Colors.white
+                                                          : Colors
+                                                                .grey
+                                                                .shade800),
+                                              ),
+                                            ),
+                                            Text(
+                                              langCode.toUpperCase(),
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: isDark
+                                                    ? Colors.white38
+                                                    : Colors.grey.shade400,
+                                                fontWeight: FontWeight.w600,
+                                                letterSpacing: 0.5,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (isSelected)
+                                        Icon(
+                                          Icons.check_circle_rounded,
+                                          color: charColor,
+                                          size: 20,
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   /// Builds a horizontal scrollable row of voice cards.
   /// [isTranslation] = true → tapping sets the translation voice.
   /// [isTranslation] = false → tapping sets the read voice.
@@ -784,111 +1487,137 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
           final langCode = locale.split('-').first.toUpperCase();
 
           return GestureDetector(
-            onTap: () => _changeVoice(voice, isTranslation: isTranslation),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              margin: const EdgeInsets.only(right: 10),
-              width: 72,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: isSelected
-                      ? [
-                          charColor.withOpacity(0.25),
-                          charColor.withOpacity(0.10),
-                        ]
-                      : isDark
-                      ? [
-                          Colors.white.withOpacity(0.07),
-                          Colors.white.withOpacity(0.03),
-                        ]
-                      : [Colors.white, Colors.grey.shade50],
-                ),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: isSelected
-                      ? charColor
-                      : (isDark ? Colors.white12 : Colors.grey.shade200),
-                  width: isSelected ? 2 : 1,
-                ),
-                boxShadow: isSelected
-                    ? [
-                        BoxShadow(
-                          color: charColor.withOpacity(0.35),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ]
-                    : [],
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: charColor.withOpacity(isSelected ? 0.25 : 0.12),
-                      border: isSelected
-                          ? Border.all(
-                              color: charColor.withOpacity(0.5),
-                              width: 1.5,
-                            )
-                          : null,
+                onTap: () => _changeVoice(voice, isTranslation: isTranslation),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  margin: const EdgeInsets.only(right: 10),
+                  width: 72,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: isSelected
+                          ? [
+                              charColor.withOpacity(0.25),
+                              charColor.withOpacity(0.10),
+                            ]
+                          : isDark
+                          ? [
+                              Colors.white.withOpacity(0.07),
+                              Colors.white.withOpacity(0.03),
+                            ]
+                          : [Colors.white, Colors.grey.shade50],
                     ),
-                    child: Center(
-                      child: Text(
-                        charEmoji,
-                        style: const TextStyle(fontSize: 24),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    charName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: isSelected
-                          ? FontWeight.w700
-                          : FontWeight.w600,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
                       color: isSelected
                           ? charColor
-                          : (isDark ? Colors.white70 : Colors.grey.shade700),
+                          : (isDark ? Colors.white12 : Colors.grey.shade200),
+                      width: isSelected ? 2 : 1,
                     ),
+                    boxShadow: isSelected
+                        ? [
+                            BoxShadow(
+                              color: charColor.withOpacity(0.35),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
+                          ]
+                        : [],
                   ),
-                  Text(
-                    langCode,
-                    style: TextStyle(
-                      fontSize: 8,
-                      color: isSelected
-                          ? charColor.withOpacity(0.8)
-                          : Colors.grey.shade400,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.5,
-                    ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: charColor.withOpacity(
+                            isSelected ? 0.25 : 0.12,
+                          ),
+                          border: isSelected
+                              ? Border.all(
+                                  color: Colors.white.withOpacity(0.8),
+                                  width: 1.5,
+                                )
+                              : null,
+                        ),
+                        child: Center(
+                          child: Text(
+                            charEmoji,
+                            style: const TextStyle(fontSize: 22),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        charName,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: isSelected
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                          color: isSelected
+                              ? charColor
+                              : (isDark
+                                    ? Colors.white70
+                                    : Colors.grey.shade700),
+                          letterSpacing: 0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      Text(
+                        langCode,
+                        style: TextStyle(
+                          fontSize: 8,
+                          color: isSelected
+                              ? charColor.withOpacity(0.8)
+                              : Colors.grey.shade400,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-          );
+                ),
+              )
+              .animate(target: isSelected ? 1 : 0)
+              .scale(
+                begin: const Offset(1, 1),
+                end: const Offset(1.05, 1.05),
+                duration: 200.ms,
+              );
         },
       ),
     );
   }
 
   Widget _sectionLabel(String text, bool isDark) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w700,
-        color: isDark ? Colors.white60 : Colors.grey.shade600,
-        letterSpacing: 0.5,
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 6),
+      child: Row(
+        children: [
+          Container(
+            width: 3,
+            height: 12,
+            decoration: BoxDecoration(
+              color: Theme.of(context).primaryColor.withOpacity(0.5),
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            text.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w900,
+              color: isDark ? Colors.white38 : Colors.grey.shade500,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -913,47 +1642,50 @@ class _TtsPlayerWidgetState extends State<TtsPlayerWidget> {
             Row(
               children: [
                 Text(emoji, style: const TextStyle(fontSize: 14)),
-                const SizedBox(width: 6),
+                const SizedBox(width: 8),
                 Text(
                   label,
                   style: TextStyle(
-                    fontWeight: FontWeight.w600,
                     fontSize: 13,
-                    color: isDark ? Colors.white70 : Colors.grey.shade700,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                    letterSpacing: 0.3,
                   ),
                 ),
               ],
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
               decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: color.withOpacity(0.3), width: 1),
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: color.withOpacity(0.2), width: 1),
               ),
               child: Text(
                 displayValue,
                 style: TextStyle(
-                  fontWeight: FontWeight.w700,
                   fontSize: 11,
+                  fontWeight: FontWeight.w800,
                   color: color,
                 ),
               ),
             ),
           ],
         ),
+        const SizedBox(height: 4),
         SliderTheme(
           data: SliderThemeData(
-            activeTrackColor: color,
-            inactiveTrackColor: color.withOpacity(0.15),
+            activeTrackColor: color.withOpacity(0.8),
+            inactiveTrackColor: isDark ? Colors.white12 : Colors.grey.shade200,
             thumbColor: Colors.white,
             overlayColor: color.withOpacity(0.15),
             thumbShape: const RoundSliderThumbShape(
-              enabledThumbRadius: 9,
-              elevation: 3,
+              enabledThumbRadius: 10,
+              elevation: 4,
             ),
-            overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-            trackHeight: 4,
+            overlayShape: const RoundSliderOverlayShape(overlayRadius: 20),
+            trackHeight: 6,
+            trackShape: const RoundedRectSliderTrackShape(),
           ),
           child: Slider(value: value, min: min, max: max, onChanged: onChanged),
         ),
