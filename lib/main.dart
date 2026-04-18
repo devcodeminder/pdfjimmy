@@ -4,44 +4,50 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:get_storage/get_storage.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:pdfjimmy/screens/home_screen.dart';
-import 'package:pdfjimmy/screens/splash_screen.dart';
-import 'package:pdfjimmy/services/dictionary.dart';
-import 'package:pdfjimmy/services/pdf_service.dart';
-
-import 'package:pdfjimmy/controllers/pdf_controller.dart';
-import 'package:pdfjimmy/providers/signature_provider.dart';
-
+import 'package:pdfjimmy/features/home/screens/home_screen.dart';
+import 'package:pdfjimmy/features/onboarding/screens/splash_screen.dart';
+import 'package:pdfjimmy/core/services/dictionary.dart';
+import 'package:pdfjimmy/core/services/pdf_service.dart';
+import 'package:pdfjimmy/features/pdf_viewer/controllers/pdf_controller.dart';
+import 'package:pdfjimmy/features/signature/providers/signature_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:pdfjimmy/services/password_storage_service.dart';
-
+import 'package:pdfjimmy/core/services/password_storage_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize sqflite for Desktop (Windows, Linux, MacOS)
-  // Initialize sqflite for Desktop (Windows, Linux, MacOS)
+  // Initialize sqflite FFI for Desktop (Windows, Linux, MacOS)
   if (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
   }
 
+  // ✅ FAST STARTUP: Only init critical synchronous services before runApp()
   await GetStorage.init();
 
-  await PasswordStorageService.instance.init();
-
   Get.lazyPut(() => DictionaryController());
-  if (!kIsWeb) {
-    await PdfService.instance.initDatabase();
-  }
   Get.lazyPut(() => PdfService.instance);
 
-  runApp(const MyApp());
+  // ✅ Build database-ready Future BEFORE runApp so splash can wait on it
+  // These run concurrently in background — do NOT block runApp()
+  final Future<void> dbReadyFuture = _initBackgroundServices();
+
+  runApp(MyApp(dbReadyFuture: dbReadyFuture));
+}
+
+/// Heavy async services initialized in the background after runApp() starts.
+Future<void> _initBackgroundServices() async {
+  await Future.wait([
+    PasswordStorageService.instance.init(),
+    if (!kIsWeb) PdfService.instance.initDatabase(),
+  ]);
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({Key? key, required this.dbReadyFuture}) : super(key: key);
+
+  final Future<void> dbReadyFuture;
 
   @override
   Widget build(BuildContext context) {
@@ -65,8 +71,8 @@ class MyApp extends StatelessWidget {
             theme: ThemeData(
               useMaterial3: true,
               brightness: Brightness.light,
-              scaffoldBackgroundColor: const Color(0xFFF8FAFC), // Slate 50
-              primaryColor: const Color(0xFFFF3B30), // iOS System Red
+              scaffoldBackgroundColor: Colors.white, // Pure white
+              primaryColor: const Color(0xFF0280F8), // Purple
 
               textTheme:
                   GoogleFonts.outfitTextTheme(
@@ -85,11 +91,11 @@ class MyApp extends StatelessWidget {
                   ),
 
               colorScheme: ColorScheme.fromSeed(
-                seedColor: const Color(0xFF6366F1),
+                seedColor: const Color(0xFF0280F8),
                 brightness: Brightness.light,
                 background: const Color(0xFFF8FAFC),
                 surface: Colors.white,
-                primary: const Color(0xFFFF3B30),
+                primary: const Color(0xFF0280F8),
                 secondary: const Color(0xFFFF9500), // iOS Orange Accent
               ),
 
@@ -113,11 +119,11 @@ class MyApp extends StatelessWidget {
               cardTheme: CardThemeData(
                 color: Colors.white,
                 elevation: 8, // Higher elevation for pop
-                shadowColor: const Color(0xFFFF3B30).withOpacity(0.12),
+                shadowColor: const Color(0xFF0280F8).withValues(alpha: 0.12),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(24),
                   side: BorderSide(
-                    color: const Color(0xFFFF3B30).withOpacity(0.08),
+                    color: const Color(0xFF0280F8).withValues(alpha: 0.08),
                     width: 1,
                   ),
                 ),
@@ -125,10 +131,10 @@ class MyApp extends StatelessWidget {
 
               elevatedButtonTheme: ElevatedButtonThemeData(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF3B30),
+                  backgroundColor: const Color(0xFF0280F8),
                   foregroundColor: Colors.white,
                   elevation: 8,
-                  shadowColor: const Color(0xFFFF3B30).withOpacity(0.3),
+                  shadowColor: const Color(0xFF0280F8).withValues(alpha: 0.3),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 32,
                     vertical: 18,
@@ -157,7 +163,7 @@ class MyApp extends StatelessWidget {
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
                   borderSide: const BorderSide(
-                    color: Color(0xFFFF3B30),
+                    color: Color(0xFF0280F8),
                     width: 2.5,
                   ),
                 ),
@@ -168,7 +174,7 @@ class MyApp extends StatelessWidget {
               ),
 
               floatingActionButtonTheme: FloatingActionButtonThemeData(
-                backgroundColor: const Color(0xFFFF3B30),
+                backgroundColor: const Color(0xFF0280F8),
                 foregroundColor: Colors.white,
                 elevation: 10,
                 shape: RoundedRectangleBorder(
@@ -192,7 +198,7 @@ class MyApp extends StatelessWidget {
               scaffoldBackgroundColor: const Color(
                 0xFF0F1115,
               ), // Deep Black/Blue background
-              primaryColor: const Color(0xFFFF3B30),
+              primaryColor: const Color(0xFF0280F8),
 
               textTheme: GoogleFonts.outfitTextTheme(ThemeData.dark().textTheme)
                   .copyWith(
@@ -212,17 +218,17 @@ class MyApp extends StatelessWidget {
                   ),
 
               colorScheme: ColorScheme.fromSeed(
-                seedColor: const Color(0xFFFF3B30), // iOS Red
+                seedColor: const Color(0xFF0280F8), // iOS Red
 
                 brightness: Brightness.dark,
                 background: const Color(0xFF0F1115),
                 surface: const Color(0xFF1A1F2E), // Card Color
-                primary: const Color(0xFFFF3B30),
+                primary: const Color(0xFF0280F8),
                 secondary: const Color(0xFFFF9500),
               ),
 
               appBarTheme: AppBarTheme(
-                backgroundColor: const Color(0xFF0F1115).withOpacity(0.9),
+                backgroundColor: const Color(0xFF0F1115).withValues(alpha: 0.9),
                 foregroundColor: Colors.white,
                 elevation: 0,
                 centerTitle: true,
@@ -239,7 +245,7 @@ class MyApp extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(24),
                   side: BorderSide(
-                    color: Colors.white.withOpacity(0.05),
+                    color: Colors.white.withValues(alpha: 0.05),
                     width: 1,
                   ),
                 ),
@@ -248,10 +254,10 @@ class MyApp extends StatelessWidget {
 
               elevatedButtonTheme: ElevatedButtonThemeData(
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFFF3B30),
+                  backgroundColor: const Color(0xFF0280F8),
                   foregroundColor: Colors.white,
                   elevation: 8,
-                  shadowColor: const Color(0xFFFF3B30).withOpacity(0.5),
+                  shadowColor: const Color(0xFF0280F8).withValues(alpha: 0.5),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(20),
                   ),
@@ -272,21 +278,21 @@ class MyApp extends StatelessWidget {
                 enabledBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
                   borderSide: BorderSide(
-                    color: Colors.white.withOpacity(0.08),
+                    color: Colors.white.withValues(alpha: 0.08),
                     width: 1.5,
                   ),
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(16),
                   borderSide: const BorderSide(
-                    color: Color(0xFFFF3B30),
+                    color: Color(0xFF0280F8),
                     width: 2.5,
                   ),
                 ),
               ),
 
               floatingActionButtonTheme: FloatingActionButtonThemeData(
-                backgroundColor: const Color(0xFFFF3B30),
+                backgroundColor: const Color(0xFF0280F8),
                 foregroundColor: Colors.white,
                 elevation: 10,
                 shape: RoundedRectangleBorder(
@@ -295,7 +301,7 @@ class MyApp extends StatelessWidget {
               ),
             ),
 
-            home: const SplashScreen(),
+            home: SplashScreen(dbReadyFuture: dbReadyFuture),
             getPages: [GetPage(name: '/home', page: () => const HomeScreen())],
           );
         },

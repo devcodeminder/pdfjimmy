@@ -1,7 +1,7 @@
 name: pdfjimmy
 description: "A new Flutter project."
 publish_to: "none"
-version: 0.1.0
+version: 1.0.7+7
 
 environment:
   sdk: ^3.8.1
@@ -16,14 +16,11 @@ dependencies:
   syncfusion_flutter_pdf: ^27.1.48
   path_provider: ^2.1.5
   file_picker: any
-  animated_text_kit: any
+
   google_fonts: ^6.3.2
-  animated_splash_screen: any
+
   flutter_colorpicker: any
-  shared_preferences: any
-  flutter_speed_dial: any
-  flutter_svg: any
-  intl: any
+
   translator: ^1.0.4+1
   image_picker: ^1.2.1
   speech_to_text: ^7.1.0
@@ -41,12 +38,10 @@ dependencies:
   uuid: any
   crop_your_image: ^2.0.0
   image: ^4.0.0
-  video_player: ^2.8.6
+
   printing: ^5.13.4
   pdf: ^3.11.1
-  googleapis: ^13.2.0
-  googleapis_auth: ^1.6.0
-  extension_google_sign_in_as_googleapis_auth: ^2.0.12
+
   google_mlkit_document_scanner: ^0.2.0
   google_mlkit_text_recognition: ^0.15.1
   gap: ^3.0.1
@@ -57,6 +52,7 @@ dependencies:
   camera: ^0.11.2+1
   flutter_animate: ^4.5.2
   reorderable_grid_view: ^2.2.8
+  open_filex: ^4.7.0
 
 dev_dependencies:
   flutter_test:
@@ -67,10 +63,10 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/pdfjimmy.png
-    - assets/splash.mp4
+
+    - assets/pdfjimmy_icon.png
 
 flutter_launcher_icons:
-  image_path: "assets/pdfjimmy.png"
+  image_path: "assets/pdfjimmy_icon.png"
   android: true
   ios: true

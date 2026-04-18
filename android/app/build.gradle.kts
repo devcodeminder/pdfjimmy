@@ -25,8 +25,8 @@ android {
         applicationId = "com.Haxfox.pdfjimmy"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 7
+        versionName = "1.0.7"
         
         // Include all architecture libraries for ONNX runtime
         ndk {
